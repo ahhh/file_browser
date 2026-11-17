@@ -1,0 +1,180 @@
+{
+  "id": "macho",
+  "name": "Mach-O executable",
+  "doc": "Apple's executable format (macOS, iOS). A thin file is a mach_header followed by load commands describing segments (__TEXT, __DATA, __LINKEDIT…), linked libraries, the entry point, symbol tables and the code signature. A universal ('fat') binary starts with a big-endian fat header listing one thin Mach-O slice per CPU architecture; offsets inside each slice are relative to the slice start.",
+  "extensions": ["dylib", "bundle", "macho", "o"],
+  "magic": [{ "offset": 0, "hex": "CF FA ED FE" }, { "offset": 0, "hex": "CE FA ED FE" }, { "offset": 0, "hex": "CA FE BA BE" }],
+  "endian": "little",
+  "root": [
+    { "name": "file", "type": "switch", "on": "peek('u32be') == 0xCAFEBABE ? 'fat' : 'thin'", "cases": { "fat": "fat", "thin": "macho" } }
+  ],
+  "structs": {
+    "fat": {
+      "label": "universal binary · ${nfatArch} architectures",
+      "endian": "big",
+      "fields": [
+        { "name": "magic", "type": "u32", "format": "hex", "expect": "0xCAFEBABE" },
+        { "name": "nfatArch", "type": "u32", "valid": "_ < 32", "validMsg": "Implausible architecture count (is this a Java .class file?)" },
+        { "name": "archs", "type": "struct", "count": "nfatArch", "label": "${enumName('cpu', cputype) || hex(cputype)} slice @ ${hex(offset)} · ${size} B", "fields": [
+          { "name": "cputype", "type": "u32", "format": "hex", "enum": "cpu" },
+          { "name": "cpusubtype", "type": "u32", "format": "hex" },
+          { "name": "offset", "type": "u32", "format": "hex" },
+          { "name": "size", "type": "u32", "valid": "offset + _ <= _size", "validLevel": "error", "validMsg": "Slice extends past the end of the file" },
+          { "name": "align", "type": "u32", "doc": "Power of two" },
+          { "name": "slice", "type": "macho", "offset": "offset", "endian": "little" }
+        ] }
+      ]
+    },
+    "macho": {
+      "label": "Mach-O ${enumName('filetype', filetype)} · ${enumName('cpu', cputype) || hex(cputype)} · ${ncmds} load commands",
+      "endian": "little",
+      "fields": [
+        { "name": "sliceBase", "type": "calc", "format": "hex", "value": "_pos", "doc": "Start of this Mach-O image; file offsets in load commands are relative to it" },
+        { "name": "magic", "type": "u32", "format": "hex", "enum": "magic", "expect": ["0xFEEDFACF", "0xFEEDFACE"] },
+        { "name": "cputype", "type": "u32", "format": "hex", "enum": "cpu" },
+        { "name": "cpusubtype", "type": "u32", "format": "hex" },
+        { "name": "filetype", "type": "u32", "enum": "filetype" },
+        { "name": "ncmds", "type": "u32" },
+        { "name": "sizeofcmds", "type": "u32" },
+        { "name": "flags", "type": "u32", "format": "hex", "bitOrder": "lsb", "bits": [
+          { "name": "noUndefs", "bits": 1 }, { "name": "incrLink", "bits": 1 }, { "name": "dyldLink", "bits": 1 }, { "name": "bindAtLoad", "bits": 1 },
+          { "name": "prebound", "bits": 1 }, { "name": "splitSegs", "bits": 1 }, { "name": "lazyInit", "bits": 1 }, { "name": "twoLevel", "bits": 1 },
+          { "name": "forceFlat", "bits": 1 }, { "name": "noMultiDefs", "bits": 1 }, { "name": "noFixPrebinding", "bits": 1 }, { "name": "prebindable", "bits": 1 },
+          { "name": "allModsBound", "bits": 1 }, { "name": "subsectionsViaSymbols", "bits": 1 }, { "name": "canonical", "bits": 1 }, { "name": "weakDefines", "bits": 1 },
+          { "name": "bindsToWeak", "bits": 1 }, { "name": "allowStackExecution", "bits": 1 }, { "name": "rootSafe", "bits": 1 }, { "name": "setuidSafe", "bits": 1 },
+          { "name": "noReexportedDylibs", "bits": 1 }, { "name": "pie", "bits": 1 }, { "name": "rest", "bits": 10, "hidden": true }
+        ] },
+        { "name": "reserved", "type": "u32", "if": "magic == 0xFEEDFACF" },
+        { "name": "loadCommands", "type": "loadCommand", "count": "ncmds" }
+      ]
+    },
+    "loadCommand": {
+      "size": "peek('u32le', 4)",
+      "label": "${enumName('lc', cmd) || hex(cmd)}${has(body.segname) ? ' ' + body.segname : ''}${has(body.name) ? ' ' + body.name : ''}",
+      "colorBy": "cmd",
+      "fields": [
+        { "name": "cmd", "type": "u32", "format": "hex", "enum": "lc" },
+        { "name": "cmdsize", "type": "u32", "valid": "_ >= 8", "validLevel": "error" },
+        { "name": "body", "type": "switch", "on": "cmd", "if": "_remaining > 0",
+          "cases": {
+            "0x19": "segment64",
+            "0x2": "symtab",
+            "0xC": "dylib", "0xD": "dylib", "0x18": "dylib", "0x8000001F": "dylib", "0x80000018": "dylib",
+            "0xE": "dylinker", "0xF": "dylinker",
+            "0x80000028": "main",
+            "0x1B": { "type": "bytes", "length": 16, "doc": "UUID" },
+            "0x1D": "linkedit", "0x26": "linkedit", "0x29": "linkedit", "0x80000033": "linkedit", "0x80000034": "linkedit", "0x1E": "linkedit",
+            "0x80000022": "dyldInfo", "0x22": "dyldInfo",
+            "0x32": "buildVersion"
+          },
+          "default": "bytes" }
+      ]
+    },
+    "segment64": {
+      "label": "${segname}",
+      "fields": [
+        { "name": "segname", "type": "string", "length": 16 },
+        { "name": "vmaddr", "type": "u64", "format": "hex" },
+        { "name": "vmsize", "type": "u64", "format": "hex" },
+        { "name": "fileoff", "type": "u64", "format": "hex" },
+        { "name": "filesize", "type": "u64", "valid": "sliceBase + fileoff + _ <= _size", "validLevel": "error", "validMsg": "Segment extends past the end of the file" },
+        { "name": "maxprot", "type": "u32", "format": "bin" },
+        { "name": "initprot", "type": "u32", "format": "bin" },
+        { "name": "nsects", "type": "u32" },
+        { "name": "flags", "type": "u32", "format": "hex" },
+        { "name": "sections", "type": "section64", "count": "nsects" }
+      ]
+    },
+    "section64": {
+      "label": "${segname},${sectname} · ${size} B",
+      "colorBy": "sectname",
+      "fields": [
+        { "name": "sectname", "type": "string", "length": 16 },
+        { "name": "segname", "type": "string", "length": 16 },
+        { "name": "addr", "type": "u64", "format": "hex" },
+        { "name": "size", "type": "u64" },
+        { "name": "offset", "type": "u32", "format": "hex" },
+        { "name": "align", "type": "u32" },
+        { "name": "reloff", "type": "u32", "format": "hex" },
+        { "name": "nreloc", "type": "u32" },
+        { "name": "flags", "type": "u32", "format": "hex", "bitOrder": "lsb", "bits": [ { "name": "type", "bits": 8, "enum": "sectType" }, { "name": "attributes", "bits": 24 } ] },
+        { "name": "reserved1", "type": "u32" }, { "name": "reserved2", "type": "u32" }, { "name": "reserved3", "type": "u32" },
+        { "name": "contents", "type": "bytes", "offset": "sliceBase + offset", "length": "size",
+          "if": "offset > 0 && size > 0 && flags.type != 1 && flags.type != 12 && flags.type != 18" }
+      ]
+    },
+    "symtab": {
+      "fields": [
+        { "name": "symoff", "type": "u32", "format": "hex" }, { "name": "nsyms", "type": "u32" },
+        { "name": "stroff", "type": "u32", "format": "hex" }, { "name": "strsize", "type": "u32" },
+        { "name": "symbols", "type": "bytes", "offset": "sliceBase + symoff", "length": "nsyms * 16", "if": "nsyms > 0", "doc": "nlist_64 entries (16 bytes each)" },
+        { "name": "strings", "type": "bytes", "offset": "sliceBase + stroff", "length": "strsize", "if": "strsize > 0", "format": "ascii" }
+      ]
+    },
+    "dylib": {
+      "label": "${name}",
+      "fields": [
+        { "name": "nameOffset", "type": "u32" },
+        { "name": "timestamp", "type": "u32" },
+        { "name": "currentVersion", "type": "u32", "bits": [ { "name": "major", "bits": 16 }, { "name": "minor", "bits": 8 }, { "name": "patch", "bits": 8 } ] },
+        { "name": "compatibilityVersion", "type": "u32", "bits": [ { "name": "major", "bits": 16 }, { "name": "minor", "bits": 8 }, { "name": "patch", "bits": 8 } ] },
+        { "name": "name", "type": "cstring" },
+        { "name": "padding", "type": "bytes", "length": "_remaining", "if": "_remaining > 0" }
+      ]
+    },
+    "dylinker": {
+      "fields": [
+        { "name": "nameOffset", "type": "u32" },
+        { "name": "name", "type": "cstring" },
+        { "name": "padding", "type": "bytes", "length": "_remaining", "if": "_remaining > 0" }
+      ]
+    },
+    "main": { "fields": [ { "name": "entryoff", "type": "u64", "format": "hex", "doc": "File offset of main() within __TEXT" }, { "name": "stacksize", "type": "u64" } ] },
+    "linkedit": {
+      "fields": [
+        { "name": "dataoff", "type": "u32", "format": "hex" },
+        { "name": "datasize", "type": "u32" },
+        { "name": "data", "type": "bytes", "offset": "sliceBase + dataoff", "length": "datasize", "if": "datasize > 0" }
+      ]
+    },
+    "dyldInfo": {
+      "fields": [
+        { "name": "rebaseOff", "type": "u32", "format": "hex" }, { "name": "rebaseSize", "type": "u32" },
+        { "name": "bindOff", "type": "u32", "format": "hex" }, { "name": "bindSize", "type": "u32" },
+        { "name": "weakBindOff", "type": "u32", "format": "hex" }, { "name": "weakBindSize", "type": "u32" },
+        { "name": "lazyBindOff", "type": "u32", "format": "hex" }, { "name": "lazyBindSize", "type": "u32" },
+        { "name": "exportOff", "type": "u32", "format": "hex" }, { "name": "exportSize", "type": "u32" },
+        { "name": "rebase", "type": "bytes", "offset": "sliceBase + rebaseOff", "length": "rebaseSize", "if": "rebaseSize > 0" },
+        { "name": "bind", "type": "bytes", "offset": "sliceBase + bindOff", "length": "bindSize", "if": "bindSize > 0" },
+        { "name": "weakBind", "type": "bytes", "offset": "sliceBase + weakBindOff", "length": "weakBindSize", "if": "weakBindSize > 0" },
+        { "name": "lazyBind", "type": "bytes", "offset": "sliceBase + lazyBindOff", "length": "lazyBindSize", "if": "lazyBindSize > 0" },
+        { "name": "exports", "type": "bytes", "offset": "sliceBase + exportOff", "length": "exportSize", "if": "exportSize > 0" }
+      ]
+    },
+    "buildVersion": {
+      "fields": [
+        { "name": "platform", "type": "u32", "enum": "platform" },
+        { "name": "minos", "type": "u32", "bits": [ { "name": "major", "bits": 16 }, { "name": "minor", "bits": 8 }, { "name": "patch", "bits": 8 } ] },
+        { "name": "sdk", "type": "u32", "bits": [ { "name": "major", "bits": 16 }, { "name": "minor", "bits": 8 }, { "name": "patch", "bits": 8 } ] },
+        { "name": "ntools", "type": "u32" },
+        { "name": "tools", "type": "struct", "count": "ntools", "fields": [ { "name": "tool", "type": "u32", "enum": "tool" }, { "name": "version", "type": "u32", "format": "hex" } ] }
+      ]
+    }
+  },
+  "enums": {
+    "magic": { "0xFEEDFACF": "MH_MAGIC_64", "0xFEEDFACE": "MH_MAGIC" },
+    "cpu": { "7": "x86", "0x01000007": "x86-64", "12": "ARM", "0x0100000C": "ARM64", "0x0200000C": "ARM64_32", "18": "PowerPC", "0x01000012": "PowerPC64" },
+    "filetype": { "1": "object", "2": "executable", "3": "fvmlib", "4": "core", "5": "preload", "6": "dylib", "7": "dylinker", "8": "bundle", "9": "dylib stub", "10": "dSYM", "11": "kext bundle", "12": "fileset" },
+    "lc": {
+      "0x1": "LC_SEGMENT", "0x2": "LC_SYMTAB", "0xB": "LC_DYSYMTAB", "0xC": "LC_LOAD_DYLIB", "0xD": "LC_ID_DYLIB", "0xE": "LC_LOAD_DYLINKER", "0xF": "LC_ID_DYLINKER",
+      "0x18": "LC_LOAD_WEAK_DYLIB", "0x19": "LC_SEGMENT_64", "0x1B": "LC_UUID", "0x1D": "LC_CODE_SIGNATURE", "0x1E": "LC_SEGMENT_SPLIT_INFO",
+      "0x21": "LC_ENCRYPTION_INFO", "0x22": "LC_DYLD_INFO", "0x80000022": "LC_DYLD_INFO_ONLY", "0x8000001C": "LC_RPATH", "0x8000001F": "LC_REEXPORT_DYLIB",
+      "0x80000018": "LC_LOAD_WEAK_DYLIB", "0x24": "LC_VERSION_MIN_MACOSX", "0x25": "LC_VERSION_MIN_IPHONEOS", "0x26": "LC_FUNCTION_STARTS", "0x2A": "LC_SOURCE_VERSION",
+      "0x80000028": "LC_MAIN", "0x29": "LC_DATA_IN_CODE", "0x2C": "LC_ENCRYPTION_INFO_64", "0x32": "LC_BUILD_VERSION",
+      "0x80000033": "LC_DYLD_EXPORTS_TRIE", "0x80000034": "LC_DYLD_CHAINED_FIXUPS"
+    },
+    "sectType": { "0": "regular", "1": "zerofill", "2": "cstring literals", "6": "non-lazy symbol pointers", "7": "lazy symbol pointers", "8": "symbol stubs", "9": "mod init funcs", "12": "gb zerofill", "18": "thread-local zerofill" },
+    "platform": { "1": "macOS", "2": "iOS", "3": "tvOS", "4": "watchOS", "6": "Mac Catalyst", "7": "iOS simulator", "11": "visionOS" },
+    "tool": { "1": "clang", "2": "swift", "3": "ld", "4": "lld" }
+  }
+}

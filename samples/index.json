@@ -1,0 +1,17 @@
+[
+  { "file": "sample.png", "desc": "Small valid PNG with a tEXt chunk" },
+  { "file": "broken.png", "desc": "Damaged signature, bad CRC, truncated IDAT, trailing garbage — try Tools ▸ Repair", "broken": true },
+  { "file": "sample.zip", "desc": "ZIP with deflated and stored entries" },
+  { "file": "broken.zip", "desc": "Garbage prefix, truncated, no central directory — try Tools ▸ Repair", "broken": true },
+  { "file": "sample.jpg", "desc": "Baseline JPEG" },
+  { "file": "sample.gif", "desc": "Animated GIF" },
+  { "file": "sample.bmp", "desc": "24-bit BMP" },
+  { "file": "sample.mp4", "desc": "H.264 + AAC MP4" },
+  { "file": "broken.mp4", "desc": "MP4 cut off before its moov box", "broken": true },
+  { "file": "sample.mkv", "desc": "Matroska video" },
+  { "file": "sample.webm", "desc": "WebM (VP9)" },
+  { "file": "sample.mp3", "desc": "MP3 with ID3v2 tag" },
+  { "file": "sample.wav", "desc": "PCM WAV" },
+  { "file": "sample.gz", "desc": "GZIP stream" },
+  { "file": "sample.elf", "desc": "Minimal x86-64 Linux ELF" }
+]

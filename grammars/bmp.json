@@ -1,0 +1,58 @@
+{
+  "id": "bmp",
+  "name": "BMP bitmap",
+  "doc": "Windows/OS2 device-independent bitmap. 14-byte file header, a DIB header whose first u32 is its own size (12, 40, 52, 56, 108 or 124), an optional colour table, and pixel rows located at dataOffset. Rows are padded to 4 bytes and are stored bottom-up unless height is negative.",
+  "extensions": ["bmp", "dib"],
+  "mime": "image/bmp",
+  "magic": [{ "offset": 0, "ascii": "BM" }],
+  "endian": "little",
+  "preview": "image",
+  "root": [
+    { "name": "fileHeader", "type": "struct", "label": "file header", "fields": [
+      { "name": "magic", "type": "string", "length": 2, "expect": ["BM", "BA", "CI", "CP", "IC", "PT"] },
+      { "name": "fileSize", "type": "u32", "valid": "_ == _size", "validMsg": "Header says ${_} bytes but the file is ${_size}" },
+      { "name": "reserved1", "type": "u16" },
+      { "name": "reserved2", "type": "u16" },
+      { "name": "dataOffset", "type": "u32", "format": "hex", "valid": "_ < _size", "validLevel": "error", "validMsg": "Pixel data offset is beyond the end of the file" }
+    ] },
+    { "name": "dib", "type": "struct", "size": "peek('u32')", "label": "${enumName('dibName', headerSize) || 'DIB header'} ${width}×${height} ${bpp}bpp", "fields": [
+      { "name": "headerSize", "type": "u32", "enum": "dibName" },
+      { "name": "width", "type": "u16", "if": "headerSize == 12" },
+      { "name": "height", "type": "u16", "if": "headerSize == 12" },
+      { "name": "width", "type": "i32", "if": "headerSize != 12" },
+      { "name": "height", "type": "i32", "if": "headerSize != 12", "doc": "Negative = top-down rows" },
+      { "name": "planes", "type": "u16", "expect": 1 },
+      { "name": "bpp", "type": "u16", "valid": "_ == 1 || _ == 2 || _ == 4 || _ == 8 || _ == 16 || _ == 24 || _ == 32" },
+      { "name": "compression", "type": "u32", "enum": "compression", "if": "headerSize >= 40" },
+      { "name": "imageSize", "type": "u32", "if": "headerSize >= 40", "doc": "May be 0 for uncompressed images" },
+      { "name": "xPixelsPerMeter", "type": "i32", "if": "headerSize >= 40" },
+      { "name": "yPixelsPerMeter", "type": "i32", "if": "headerSize >= 40" },
+      { "name": "colorsUsed", "type": "u32", "if": "headerSize >= 40" },
+      { "name": "colorsImportant", "type": "u32", "if": "headerSize >= 40" },
+      { "name": "redMask", "type": "u32", "format": "hex", "if": "headerSize >= 52" },
+      { "name": "greenMask", "type": "u32", "format": "hex", "if": "headerSize >= 52" },
+      { "name": "blueMask", "type": "u32", "format": "hex", "if": "headerSize >= 52" },
+      { "name": "alphaMask", "type": "u32", "format": "hex", "if": "headerSize >= 56" },
+      { "name": "colorSpace", "type": "u32", "format": "fourcc", "if": "headerSize >= 108" },
+      { "name": "colorSpaceData", "type": "bytes", "length": "_remaining", "if": "_remaining > 0" }
+    ] },
+    { "name": "palette", "type": "bgra", "if": "dib.bpp <= 8",
+      "count": "min(dib.colorsUsed ? dib.colorsUsed : (1 << dib.bpp), max(0, (fileHeader.dataOffset - _pos) / (dib.headerSize == 12 ? 3 : 4)))" },
+    { "name": "pixels", "type": "bytes", "offset": "fileHeader.dataOffset",
+      "length": "(dib.imageSize && dib.compression != 0) ? dib.imageSize : floor((abs(dib.width) * dib.bpp + 31) / 32) * 4 * abs(dib.height)",
+      "doc": "Pixel rows. Each row is padded to a multiple of 4 bytes." }
+  ],
+  "structs": {
+    "bgra": {
+      "label": "#${hex(r,2).slice(2)}${hex(g,2).slice(2)}${hex(b,2).slice(2)}",
+      "fields": [
+        { "name": "b", "type": "u8" }, { "name": "g", "type": "u8" }, { "name": "r", "type": "u8" },
+        { "name": "reserved", "type": "u8", "if": "dib.headerSize != 12" }
+      ]
+    }
+  },
+  "enums": {
+    "dibName": { "12": "BITMAPCOREHEADER", "40": "BITMAPINFOHEADER", "52": "BITMAPV2INFOHEADER", "56": "BITMAPV3INFOHEADER", "64": "OS22XBITMAPHEADER", "108": "BITMAPV4HEADER", "124": "BITMAPV5HEADER" },
+    "compression": { "0": "BI_RGB (none)", "1": "BI_RLE8", "2": "BI_RLE4", "3": "BI_BITFIELDS", "4": "BI_JPEG", "5": "BI_PNG", "6": "BI_ALPHABITFIELDS", "11": "BI_CMYK" }
+  }
+}

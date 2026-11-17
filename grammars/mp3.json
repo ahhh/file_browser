@@ -1,0 +1,145 @@
+{
+  "id": "mp3",
+  "name": "MP3 audio",
+  "doc": "MPEG-1/2/2.5 Audio Layer I/II/III. Usually an ID3v2 tag (metadata, cover art) at the start, then a run of independent frames, each beginning with an 11-bit sync word. Frame length is derived from the bitrate, sample rate and padding bit in the 4-byte header. An optional 128-byte ID3v1 tag ('TAG') sits at the very end. Because frames are self-synchronising, damaged regions can be skipped and playback resumes at the next valid frame.",
+  "extensions": ["mp3", "mp2", "mpga"],
+  "mime": "audio/mpeg",
+  "magic": [{ "offset": 0, "ascii": "ID3" }, { "offset": 0, "hex": "FF FB" }, { "offset": 0, "hex": "FF F3" }, { "offset": 0, "hex": "FF F2" }, { "offset": 0, "hex": "FF FA" }],
+  "endian": "big",
+  "bitOrder": "msb",
+  "preview": "media",
+  "constants": {
+    "bitrates": {
+      "V1L1": [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 0],
+      "V1L2": [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 0],
+      "V1L3": [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0],
+      "V2L1": [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256, 0],
+      "V2L23": [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0]
+    },
+    "sampleRates": { "3": [44100, 48000, 32000, 0], "2": [22050, 24000, 16000, 0], "0": [11025, 12000, 8000, 0], "1": [0, 0, 0, 0] }
+  },
+  "root": [
+    { "name": "id3v2", "type": "id3v2", "if": "ascii(0, 3) == 'ID3'" },
+    { "name": "frames", "type": "switch", "repeat": "eof",
+      "on": "ascii(_pos, 3) == 'TAG' && _remaining == 128 ? 'id3v1' : ((peek('u16') & 0xFFE0) == 0xFFE0 && (peek('u8', 1) & 0x06) != 0 && (peek('u8', 2) & 0xF0) != 0xF0 && (peek('u8', 2) & 0x0C) != 0x0C ? 'frame' : 'garbage')",
+      "cases": {
+        "frame": "frame",
+        "id3v1": "id3v1",
+        "garbage": { "type": "bytes", "terminator": "FF E0-FF", "warn": "Not a valid MPEG frame header; skipped ${len(_)} bytes to the next frame sync" }
+      } }
+  ],
+  "structs": {
+    "id3v2": {
+      "size": "10 + syncsafe32(_pos + 6) + (read('u8', _pos + 5) & 0x10 ? 10 : 0)",
+      "label": "ID3v2.${major}.${revision} tag · ${tagSize} B",
+      "colorBy": "'id3'",
+      "fields": [
+        { "name": "magic", "type": "string", "length": 3, "expect": "ID3" },
+        { "name": "major", "type": "u8", "valid": "_ >= 2 && _ <= 4" },
+        { "name": "revision", "type": "u8" },
+        { "name": "flags", "type": "u8", "format": "bin", "bits": [
+          { "name": "unsynchronisation", "bits": 1 }, { "name": "extendedHeader", "bits": 1 }, { "name": "experimental", "bits": 1 }, { "name": "footer", "bits": 1 }, { "name": "reserved", "bits": 4, "hidden": true }
+        ] },
+        { "name": "rawSize", "type": "u32", "format": "hex", "doc": "Synchsafe integer: 4 × 7 bits, high bit of every byte is 0" },
+        { "name": "tagSize", "type": "calc", "value": "syncsafe32(_pos - 4)", "unit": "B" },
+        { "name": "extendedHeader", "type": "bytes", "if": "flags.extendedHeader", "length": "major == 4 ? syncsafe32(_pos) : read('u32', _pos) + 4" },
+        { "name": "tagFrames", "type": "id3frame", "repeat": "eof", "while": "_remaining >= 10 && peek('u8') != 0", "if": "major >= 3" },
+        { "name": "padding", "type": "bytes", "length": "_remaining", "if": "_remaining > 0 && !flags.footer" },
+        { "name": "footerData", "type": "bytes", "length": "_remaining", "if": "_remaining > 0" }
+      ]
+    },
+    "id3frame": {
+      "label": "${id}${enumName('frameName', id) ? ' (' + enumName('frameName', id) + ')' : ''}${has(data.text) ? ': ' + data.text : ''}",
+      "colorBy": "id",
+      "fields": [
+        { "name": "id", "type": "string", "length": 4, "enum": "frameName",
+          "valid": "match(_pos - 4, '41-5A,30-39 41-5A,30-39 41-5A,30-39 41-5A,30-39')", "validMsg": "Frame id is not A-Z0-9 — tag is corrupt from here" },
+        { "name": "rawSize", "type": "u32" },
+        { "name": "size", "type": "calc", "value": "_parent.major == 4 ? syncsafe32(_pos - 4) : rawSize", "doc": "ID3v2.4 uses synchsafe frame sizes, v2.3 plain u32" },
+        { "name": "frameFlags", "type": "u16", "format": "hex" },
+        { "name": "data", "type": "switch", "size": "size",
+          "on": "id.startsWith('T') && id != 'TXXX' ? 'text' : (id.startsWith('W') && id != 'WXXX' ? 'url' : id)",
+          "cases": { "text": "textFrame", "url": { "type": "string", "length": "_remaining" }, "APIC": "apic", "COMM": "comm" },
+          "default": "bytes" }
+      ]
+    },
+    "textFrame": {
+      "fields": [
+        { "name": "encoding", "type": "u8", "enum": "textEncoding" },
+        { "name": "text", "type": "string", "length": "_remaining", "if": "encoding == 0" },
+        { "name": "text", "type": "string", "length": "_remaining", "encoding": "utf-16", "if": "encoding == 1" },
+        { "name": "text", "type": "string", "length": "_remaining", "encoding": "utf-16be", "if": "encoding == 2" },
+        { "name": "text", "type": "string", "length": "_remaining", "encoding": "utf-8", "if": "encoding == 3" }
+      ]
+    },
+    "comm": {
+      "fields": [
+        { "name": "encoding", "type": "u8", "enum": "textEncoding" },
+        { "name": "language", "type": "string", "length": 3 },
+        { "name": "content", "type": "bytes", "length": "_remaining", "doc": "Short description, terminator, then the comment text (encoding-dependent)" }
+      ]
+    },
+    "apic": {
+      "label": "picture · ${mime}",
+      "fields": [
+        { "name": "encoding", "type": "u8", "enum": "textEncoding" },
+        { "name": "mime", "type": "cstring" },
+        { "name": "pictureType", "type": "u8", "enum": "pictureType" },
+        { "name": "description", "type": "cstring", "if": "encoding == 0 || encoding == 3" },
+        { "name": "description", "type": "bytes", "terminator": "00 00", "consume": true, "if": "encoding == 1 || encoding == 2" },
+        { "name": "picture", "type": "bytes", "length": "_remaining", "doc": "Embedded image file (usually JPEG or PNG). Select it and use Tools ▸ Open selection as file to inspect it." }
+      ]
+    },
+    "frame": {
+      "label": "${enumName('mpegVersion', header.version)} ${enumName('layer', header.layer)} · ${bitrate} kbps · ${sampleRate} Hz · ${enumName('channelMode', header.channelMode)}",
+      "colorBy": "'frame'",
+      "fields": [
+        { "name": "header", "type": "u32", "format": "hex", "bits": [
+          { "name": "sync", "bits": 11 },
+          { "name": "version", "bits": 2, "enum": "mpegVersion" },
+          { "name": "layer", "bits": 2, "enum": "layer" },
+          { "name": "noCrc", "bits": 1, "doc": "Protection bit: 1 = no CRC follows the header" },
+          { "name": "bitrateIndex", "bits": 4 },
+          { "name": "sampleRateIndex", "bits": 2 },
+          { "name": "padding", "bits": 1 },
+          { "name": "private", "bits": 1 },
+          { "name": "channelMode", "bits": 2, "enum": "channelMode" },
+          { "name": "modeExtension", "bits": 2 },
+          { "name": "copyright", "bits": 1 },
+          { "name": "original", "bits": 1 },
+          { "name": "emphasis", "bits": 2 }
+        ],
+          "valid": "_.bitrateIndex != 0 && _.bitrateIndex != 15 && _.sampleRateIndex != 3 && _.layer != 0 && _.version != 1",
+          "validLevel": "error", "validMsg": "Invalid or free-format frame header" },
+        { "name": "bitrate", "type": "calc", "unit": "kbps",
+          "value": "bitrates[(header.version == 3 ? 'V1' : 'V2') + (header.layer == 3 ? 'L1' : (header.version == 3 ? (header.layer == 2 ? 'L2' : 'L3') : 'L23'))][header.bitrateIndex]" },
+        { "name": "sampleRate", "type": "calc", "unit": "Hz", "value": "sampleRates[header.version][header.sampleRateIndex]" },
+        { "name": "frameLength", "type": "calc", "unit": "B",
+          "value": "header.layer == 3 ? floor(12 * bitrate * 1000 / sampleRate + header.padding) * 4 : floor((header.layer == 1 && header.version != 3 ? 72 : 144) * bitrate * 1000 / sampleRate) + header.padding" },
+        { "name": "crc", "type": "u16", "format": "hex", "if": "!header.noCrc" },
+        { "name": "audioData", "type": "bytes", "length": "frameLength - 4 - (header.noCrc ? 0 : 2)", "if": "frameLength > 4" }
+      ]
+    },
+    "id3v1": {
+      "label": "ID3v1 · ${artist} — ${title}",
+      "colorBy": "'id3'",
+      "fields": [
+        { "name": "tag", "type": "string", "length": 3, "expect": "TAG" },
+        { "name": "title", "type": "string", "length": 30 },
+        { "name": "artist", "type": "string", "length": 30 },
+        { "name": "album", "type": "string", "length": 30 },
+        { "name": "year", "type": "string", "length": 4 },
+        { "name": "comment", "type": "string", "length": 30 },
+        { "name": "genre", "type": "u8" }
+      ]
+    }
+  },
+  "enums": {
+    "mpegVersion": { "0": "MPEG-2.5", "1": "(reserved)", "2": "MPEG-2", "3": "MPEG-1" },
+    "layer": { "0": "(reserved)", "1": "Layer III", "2": "Layer II", "3": "Layer I" },
+    "channelMode": { "0": "stereo", "1": "joint stereo", "2": "dual channel", "3": "mono" },
+    "textEncoding": { "0": "ISO-8859-1", "1": "UTF-16 with BOM", "2": "UTF-16BE", "3": "UTF-8" },
+    "pictureType": { "0": "other", "1": "file icon", "2": "other icon", "3": "front cover", "4": "back cover", "5": "leaflet", "6": "media", "7": "lead artist", "8": "artist", "18": "illustration" },
+    "frameName": { "TIT2": "title", "TPE1": "artist", "TPE2": "album artist", "TALB": "album", "TYER": "year", "TDRC": "recording time", "TRCK": "track", "TPOS": "disc", "TCON": "genre", "TCOM": "composer", "TSSE": "encoder settings", "TENC": "encoded by", "TLEN": "length (ms)", "COMM": "comment", "APIC": "attached picture", "USLT": "lyrics", "PRIV": "private", "TXXX": "user text", "GEOB": "object", "UFID": "unique file id", "WXXX": "user URL" }
+  }
+}

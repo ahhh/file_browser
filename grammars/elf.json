@@ -1,0 +1,85 @@
+{
+  "id": "elf",
+  "name": "ELF executable",
+  "doc": "Executable and Linkable Format (Linux, BSD, most Unix-likes). e_ident tells the word size (32/64-bit) and byte order. The header points at the program header table (segments, used by the loader) and the section header table (sections, used by linkers/debuggers).",
+  "extensions": ["elf", "so", "o", "ko", "axf", "bin"],
+  "magic": [{ "offset": 0, "hex": "7F 45 4C 46" }],
+  "endian": "little",
+  "root": [
+    { "name": "ident", "type": "struct", "label": "e_ident · ${enumName('class', class)} ${enumName('data', data)}", "fields": [
+      { "name": "magic", "type": "bytes", "length": 4, "expect": "7F454C46" },
+      { "name": "class", "type": "u8", "enum": "class", "enumStrict": true },
+      { "name": "data", "type": "u8", "enum": "data", "enumStrict": true },
+      { "name": "version", "type": "u8", "expect": 1, "expectLevel": "warn" },
+      { "name": "osabi", "type": "u8", "enum": "osabi" },
+      { "name": "abiVersion", "type": "u8" },
+      { "name": "pad", "type": "bytes", "length": 7 }
+    ] },
+    { "name": "header", "type": "struct", "endian": "ident.data == 2 ? 'big' : 'little'", "label": "ELF header · ${enumName('etype', type)} · ${enumName('machine', machine) || machine}", "fields": [
+      { "name": "type", "type": "u16", "enum": "etype" },
+      { "name": "machine", "type": "u16", "enum": "machine" },
+      { "name": "version", "type": "u32" },
+      { "name": "entry", "type": "switch", "on": "ident.class", "cases": { "1": "u32", "2": "u64" }, "format": "hex" },
+      { "name": "phoff", "type": "switch", "on": "ident.class", "cases": { "1": "u32", "2": "u64" }, "format": "hex" },
+      { "name": "shoff", "type": "switch", "on": "ident.class", "cases": { "1": "u32", "2": "u64" }, "format": "hex" },
+      { "name": "flags", "type": "u32", "format": "hex" },
+      { "name": "ehsize", "type": "u16" },
+      { "name": "phentsize", "type": "u16" },
+      { "name": "phnum", "type": "u16" },
+      { "name": "shentsize", "type": "u16" },
+      { "name": "shnum", "type": "u16" },
+      { "name": "shstrndx", "type": "u16" }
+    ] },
+    { "name": "programHeaders", "type": "programHeader", "offset": "header.phoff", "count": "header.phnum", "if": "header.phnum > 0" },
+    { "name": "sectionHeaders", "type": "sectionHeader", "offset": "header.shoff", "count": "header.shnum", "if": "header.shnum > 0" }
+  ],
+  "structs": {
+    "programHeader": {
+      "size": "header.phentsize",
+      "endian": "ident.data == 2 ? 'big' : 'little'",
+      "label": "${enumName('ptype', type) || hex(type, 8)} @ ${hex(offset)} (${filesz} B)",
+      "colorBy": "'segment'",
+      "fields": [
+        { "name": "type", "type": "u32", "enum": "ptype" },
+        { "name": "flags", "type": "u32", "if": "ident.class == 2", "format": "bin", "bitOrder": "lsb", "bits": [ { "name": "x", "bits": 1 }, { "name": "w", "bits": 1 }, { "name": "r", "bits": 1 }, { "name": "rest", "bits": 29, "hidden": true } ] },
+        { "name": "offset", "type": "switch", "on": "ident.class", "cases": { "1": "u32", "2": "u64" }, "format": "hex" },
+        { "name": "vaddr", "type": "switch", "on": "ident.class", "cases": { "1": "u32", "2": "u64" }, "format": "hex" },
+        { "name": "paddr", "type": "switch", "on": "ident.class", "cases": { "1": "u32", "2": "u64" }, "format": "hex" },
+        { "name": "filesz", "type": "switch", "on": "ident.class", "cases": { "1": "u32", "2": "u64" },
+          "valid": "offset + _ <= _size", "validLevel": "error", "validMsg": "Segment extends past the end of the file" },
+        { "name": "memsz", "type": "switch", "on": "ident.class", "cases": { "1": "u32", "2": "u64" } },
+        { "name": "flags", "type": "u32", "if": "ident.class == 1", "format": "bin", "bitOrder": "lsb", "bits": [ { "name": "x", "bits": 1 }, { "name": "w", "bits": 1 }, { "name": "r", "bits": 1 }, { "name": "rest", "bits": 29, "hidden": true } ] },
+        { "name": "align", "type": "switch", "on": "ident.class", "cases": { "1": "u32", "2": "u64" }, "format": "hex" }
+      ]
+    },
+    "sectionHeader": {
+      "size": "header.shentsize",
+      "endian": "ident.data == 2 ? 'big' : 'little'",
+      "label": "${cstr(_root.sectionHeaders[_root.header.shstrndx].offset + name) || '(section ' + _index + ')'} · ${enumName('shtype', type) || hex(type, 8)}",
+      "colorBy": "type",
+      "fields": [
+        { "name": "name", "type": "u32", "doc": "Offset of the name in the section-name string table (section shstrndx)" },
+        { "name": "type", "type": "u32", "enum": "shtype" },
+        { "name": "flags", "type": "switch", "on": "ident.class", "cases": { "1": "u32", "2": "u64" }, "format": "hex" },
+        { "name": "addr", "type": "switch", "on": "ident.class", "cases": { "1": "u32", "2": "u64" }, "format": "hex" },
+        { "name": "offset", "type": "switch", "on": "ident.class", "cases": { "1": "u32", "2": "u64" }, "format": "hex" },
+        { "name": "size", "type": "switch", "on": "ident.class", "cases": { "1": "u32", "2": "u64" } },
+        { "name": "link", "type": "u32" },
+        { "name": "info", "type": "u32" },
+        { "name": "addralign", "type": "switch", "on": "ident.class", "cases": { "1": "u32", "2": "u64" } },
+        { "name": "entsize", "type": "switch", "on": "ident.class", "cases": { "1": "u32", "2": "u64" } },
+        { "name": "contents", "type": "bytes", "offset": "offset", "length": "size", "if": "type != 8 && type != 0 && size > 0",
+          "doc": "Section contents (seeked to via the offset field)" }
+      ]
+    }
+  },
+  "enums": {
+    "class": { "1": "ELF32", "2": "ELF64" },
+    "data": { "1": "little-endian", "2": "big-endian" },
+    "osabi": { "0": "System V", "3": "Linux", "6": "Solaris", "9": "FreeBSD", "12": "OpenBSD", "255": "Standalone" },
+    "etype": { "0": "NONE", "1": "REL (relocatable)", "2": "EXEC (executable)", "3": "DYN (shared/PIE)", "4": "CORE" },
+    "machine": { "3": "x86", "8": "MIPS", "20": "PowerPC", "21": "PowerPC64", "40": "ARM", "62": "x86-64", "183": "AArch64", "243": "RISC-V", "247": "BPF" },
+    "ptype": { "0": "NULL", "1": "LOAD", "2": "DYNAMIC", "3": "INTERP", "4": "NOTE", "5": "SHLIB", "6": "PHDR", "7": "TLS", "0x6474e550": "GNU_EH_FRAME", "0x6474e551": "GNU_STACK", "0x6474e552": "GNU_RELRO", "0x6474e553": "GNU_PROPERTY" },
+    "shtype": { "0": "NULL", "1": "PROGBITS", "2": "SYMTAB", "3": "STRTAB", "4": "RELA", "5": "HASH", "6": "DYNAMIC", "7": "NOTE", "8": "NOBITS", "9": "REL", "11": "DYNSYM", "14": "INIT_ARRAY", "15": "FINI_ARRAY", "0x6ffffff6": "GNU_HASH", "0x6ffffffe": "VERNEED", "0x6fffffff": "VERSYM" }
+  }
+}

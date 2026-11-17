@@ -1,0 +1,234 @@
+{
+  "id": "mp4",
+  "name": "MP4 / MOV (ISO-BMFF)",
+  "doc": "ISO Base Media File Format (ISO/IEC 14496-12), used by MP4, M4A, MOV, 3GP, HEIC and AVIF. Everything is a 'box' (QuickTime calls them atoms): u32 size, 4-char type, then payload. size 1 means a 64-bit size follows; size 0 means the box runs to the end of the file. Container boxes (moov, trak, mdia…) hold child boxes. 'Full boxes' start with a version byte and 24 bits of flags. The sample tables under stbl index into mdat — if moov is missing (e.g. a recording that was cut off) players cannot find the frames even though the data is present.",
+  "extensions": ["mp4", "m4a", "m4v", "m4b", "mov", "qt", "3gp", "3g2", "heic", "heif", "avif", "f4v", "mj2"],
+  "mime": "video/mp4",
+  "magic": [{ "offset": 4, "ascii": "ftyp" }, { "offset": 4, "ascii": "moov" }, { "offset": 4, "ascii": "mdat" }, { "offset": 4, "ascii": "wide" }],
+  "endian": "big",
+  "preview": "media",
+  "root": [
+    { "name": "boxes", "type": "box", "repeat": "eof" }
+  ],
+  "structs": {
+    "box": {
+      "size": "peek('u32') == 1 ? peek('u64', 8) : (peek('u32') == 0 ? _remaining : peek('u32'))",
+      "label": "${type} · ${_length} B${enumName('boxName', type) ? ' · ' + enumName('boxName', type) : ''}",
+      "colorBy": "type",
+      "fields": [
+        { "name": "size", "type": "u32", "doc": "Box size including this header. 1 = 64-bit largeSize follows; 0 = box extends to end of file.",
+          "valid": "_ == 0 || _ == 1 || _ >= 8", "validLevel": "error", "validMsg": "Box size ${_} is smaller than a box header" },
+        { "name": "type", "type": "string", "length": 4, "trim": false,
+          "valid": "match(_pos - 4, '20-7E,A9 20-7E 20-7E 20-7E')", "validMsg": "Box type is not printable — box stream is probably out of sync" },
+        { "name": "largeSize", "type": "u64", "if": "size == 1" },
+        { "name": "userType", "type": "bytes", "length": 16, "if": "type == 'uuid'" },
+        { "name": "body", "type": "switch", "on": "type", "if": "_remaining > 0",
+          "cases": {
+            "moov": "container", "trak": "container", "mdia": "container", "minf": "container", "stbl": "container",
+            "dinf": "container", "edts": "container", "udta": "container", "mvex": "container", "moof": "container",
+            "traf": "container", "mfra": "container", "ilst": "container", "sinf": "container", "schi": "container",
+            "gmhd": "container", "tref": "container", "iprp": "container", "ipco": "container", "wave": "container",
+            "ftyp": "ftyp", "styp": "ftyp",
+            "mvhd": "mvhd", "tkhd": "tkhd", "mdhd": "mdhd", "hdlr": "hdlr", "meta": "meta",
+            "stsd": "stsd", "stts": "stts", "stsc": "stsc", "stsz": "stsz", "stco": "stco", "co64": "co64", "stss": "stss",
+            "elst": "elst", "mfhd": "mfhd", "tfhd": "fullboxRest", "trun": "fullboxRest", "sidx": "fullboxRest",
+            "mdat": { "type": "bytes", "doc": "Media data: the actual audio/video samples, located via the sample tables (stco/co64, stsz, stsc)." },
+            "free": "bytes", "skip": "bytes", "wide": "bytes"
+          },
+          "default": "bytes" }
+      ]
+    },
+    "container": { "fields": [ { "name": "children", "type": "box", "repeat": "eof" } ] },
+    "fullboxRest": { "fields": [
+      { "name": "version", "type": "u8" }, { "name": "flags", "type": "u24", "format": "hex" },
+      { "name": "payload", "type": "bytes", "length": "_remaining", "if": "_remaining > 0" }
+    ] },
+    "ftyp": {
+      "label": "${majorBrand}",
+      "fields": [
+        { "name": "majorBrand", "type": "string", "length": 4, "trim": false, "enum": "brand" },
+        { "name": "minorVersion", "type": "u32" },
+        { "name": "compatibleBrands", "type": "string", "length": 4, "trim": false, "repeat": "eof" }
+      ]
+    },
+    "mvhd": {
+      "label": "duration ${floor(duration / timescale * 100) / 100} s",
+      "fields": [
+        { "name": "version", "type": "u8" }, { "name": "flags", "type": "u24", "format": "hex" },
+        { "name": "creationTime", "type": "switch", "on": "version", "cases": { "1": "u64" }, "default": "u32", "doc": "Seconds since 1904-01-01" },
+        { "name": "modificationTime", "type": "switch", "on": "version", "cases": { "1": "u64" }, "default": "u32" },
+        { "name": "timescale", "type": "u32", "unit": "units/s" },
+        { "name": "duration", "type": "switch", "on": "version", "cases": { "1": "u64" }, "default": "u32" },
+        { "name": "durationSeconds", "type": "calc", "value": "duration / timescale", "unit": "s" },
+        { "name": "rate", "type": "u32", "scale": 0.0000152587890625, "doc": "16.16 fixed point, 1.0 = normal" },
+        { "name": "volume", "type": "u16", "scale": 0.00390625, "doc": "8.8 fixed point" },
+        { "name": "reserved", "type": "bytes", "length": 10 },
+        { "name": "matrix", "type": "bytes", "length": 36 },
+        { "name": "preDefined", "type": "bytes", "length": 24 },
+        { "name": "nextTrackId", "type": "u32" }
+      ]
+    },
+    "tkhd": {
+      "label": "track ${trackId}${width ? ' · ' + floor(width / 65536) + '×' + floor(height / 65536) : ''}",
+      "fields": [
+        { "name": "version", "type": "u8" },
+        { "name": "flags", "type": "u24", "format": "hex", "bits": [ { "name": "reserved", "bits": 20, "hidden": true }, { "name": "inPreview", "bits": 1 }, { "name": "inMovie", "bits": 1 }, { "name": "enabled", "bits": 1 }, { "name": "r", "bits": 1, "hidden": true } ] },
+        { "name": "creationTime", "type": "switch", "on": "version", "cases": { "1": "u64" }, "default": "u32" },
+        { "name": "modificationTime", "type": "switch", "on": "version", "cases": { "1": "u64" }, "default": "u32" },
+        { "name": "trackId", "type": "u32" },
+        { "name": "reserved", "type": "u32" },
+        { "name": "duration", "type": "switch", "on": "version", "cases": { "1": "u64" }, "default": "u32" },
+        { "name": "reserved2", "type": "bytes", "length": 8 },
+        { "name": "layer", "type": "i16" },
+        { "name": "alternateGroup", "type": "i16" },
+        { "name": "volume", "type": "u16", "scale": 0.00390625 },
+        { "name": "reserved3", "type": "u16" },
+        { "name": "matrix", "type": "bytes", "length": 36 },
+        { "name": "width", "type": "u32", "scale": 0.0000152587890625, "unit": "px" },
+        { "name": "height", "type": "u32", "scale": 0.0000152587890625, "unit": "px" }
+      ]
+    },
+    "mdhd": {
+      "label": "${timescale} Hz · ${languageCode}",
+      "fields": [
+        { "name": "version", "type": "u8" }, { "name": "flags", "type": "u24", "format": "hex" },
+        { "name": "creationTime", "type": "switch", "on": "version", "cases": { "1": "u64" }, "default": "u32" },
+        { "name": "modificationTime", "type": "switch", "on": "version", "cases": { "1": "u64" }, "default": "u32" },
+        { "name": "timescale", "type": "u32" },
+        { "name": "duration", "type": "switch", "on": "version", "cases": { "1": "u64" }, "default": "u32" },
+        { "name": "language", "type": "u16", "bits": [ { "name": "pad", "bits": 1, "hidden": true }, { "name": "c1", "bits": 5 }, { "name": "c2", "bits": 5 }, { "name": "c3", "bits": 5 } ] },
+        { "name": "languageCode", "type": "calc", "value": "chr(language.c1 + 0x60) + chr(language.c2 + 0x60) + chr(language.c3 + 0x60)", "doc": "ISO-639-2/T code packed as three 5-bit letters" },
+        { "name": "preDefined", "type": "u16" }
+      ]
+    },
+    "hdlr": {
+      "label": "${enumName('handler', handlerType) || handlerType}",
+      "fields": [
+        { "name": "version", "type": "u8" }, { "name": "flags", "type": "u24", "format": "hex" },
+        { "name": "preDefined", "type": "u32", "format": "fourcc" },
+        { "name": "handlerType", "type": "string", "length": 4, "enum": "handler" },
+        { "name": "reserved", "type": "bytes", "length": 12 },
+        { "name": "name", "type": "string", "length": "_remaining", "encoding": "utf-8" }
+      ]
+    },
+    "meta": {
+      "fields": [
+        { "name": "version", "type": "u8", "if": "ascii(_pos + 4, 4) != 'hdlr'", "doc": "ISO meta is a full box; QuickTime meta is not." },
+        { "name": "flags", "type": "u24", "format": "hex", "if": "has(version)" },
+        { "name": "children", "type": "box", "repeat": "eof" }
+      ]
+    },
+    "stsd": {
+      "label": "${entryCount} sample description(s)",
+      "fields": [
+        { "name": "version", "type": "u8" }, { "name": "flags", "type": "u24", "format": "hex" },
+        { "name": "entryCount", "type": "u32" },
+        { "name": "entries", "type": "sampleEntry", "repeat": "eof" }
+      ]
+    },
+    "sampleEntry": {
+      "size": "peek('u32')",
+      "label": "${format}${width ? ' · ' + width + '×' + height : ''}${sampleRate ? ' · ' + channels + 'ch ' + floor(sampleRate / 65536) + ' Hz' : ''}",
+      "colorBy": "format",
+      "fields": [
+        { "name": "size", "type": "u32" },
+        { "name": "format", "type": "string", "length": 4, "doc": "Codec fourcc: avc1/hvc1/hev1/av01/vp09 video, mp4a/Opus/ac-3 audio…" },
+        { "name": "reserved", "type": "bytes", "length": 6 },
+        { "name": "dataReferenceIndex", "type": "u16" },
+        { "name": "preDefined", "type": "bytes", "length": 16, "if": "format == 'avc1' || format == 'avc3' || format == 'hvc1' || format == 'hev1' || format == 'av01' || format == 'vp09' || format == 'vp08' || format == 'mp4v'" },
+        { "name": "width", "type": "u16", "unit": "px", "if": "has(preDefined)" },
+        { "name": "height", "type": "u16", "unit": "px", "if": "has(preDefined)" },
+        { "name": "videoRest", "type": "bytes", "length": 50, "if": "has(preDefined)", "doc": "resolution, frame count, compressor name, depth" },
+        { "name": "audioReserved", "type": "bytes", "length": 8, "if": "format == 'mp4a' || format == 'Opus' || format == 'ac-3' || format == 'ec-3' || format == 'alac' || format == 'fLaC'" },
+        { "name": "channels", "type": "u16", "if": "has(audioReserved)" },
+        { "name": "sampleSize", "type": "u16", "if": "has(audioReserved)" },
+        { "name": "audioPreDefined", "type": "u32", "if": "has(audioReserved)" },
+        { "name": "sampleRate", "type": "u32", "if": "has(audioReserved)", "scale": 0.0000152587890625, "unit": "Hz" },
+        { "name": "codecBoxes", "type": "box", "repeat": "eof", "if": "has(preDefined) || has(audioReserved)" },
+        { "name": "data", "type": "bytes", "length": "_remaining", "if": "_remaining > 0" }
+      ]
+    },
+    "stts": {
+      "label": "${entryCount} time-to-sample entries",
+      "fields": [
+        { "name": "version", "type": "u8" }, { "name": "flags", "type": "u24", "format": "hex" },
+        { "name": "entryCount", "type": "u32" },
+        { "name": "entries", "type": "struct", "count": "entryCount", "label": "${sampleCount} × ${sampleDelta}", "fields": [
+          { "name": "sampleCount", "type": "u32" }, { "name": "sampleDelta", "type": "u32" }
+        ] }
+      ]
+    },
+    "stsc": {
+      "label": "${entryCount} sample-to-chunk entries",
+      "fields": [
+        { "name": "version", "type": "u8" }, { "name": "flags", "type": "u24", "format": "hex" },
+        { "name": "entryCount", "type": "u32" },
+        { "name": "entries", "type": "struct", "count": "entryCount", "fields": [
+          { "name": "firstChunk", "type": "u32" }, { "name": "samplesPerChunk", "type": "u32" }, { "name": "sampleDescriptionIndex", "type": "u32" }
+        ] }
+      ]
+    },
+    "stsz": {
+      "label": "${sampleCount} samples",
+      "fields": [
+        { "name": "version", "type": "u8" }, { "name": "flags", "type": "u24", "format": "hex" },
+        { "name": "sampleSize", "type": "u32", "doc": "0 = sizes listed individually" },
+        { "name": "sampleCount", "type": "u32" },
+        { "name": "sizes", "type": "u32", "count": "sampleCount", "if": "sampleSize == 0" }
+      ]
+    },
+    "stco": {
+      "label": "${entryCount} chunk offsets",
+      "fields": [
+        { "name": "version", "type": "u8" }, { "name": "flags", "type": "u24", "format": "hex" },
+        { "name": "entryCount", "type": "u32" },
+        { "name": "offsets", "type": "u32", "format": "hex", "count": "entryCount",
+          "valid": "_ < _size", "validLevel": "error", "validMsg": "Chunk offset points past the end of the file (truncated mdat?)" }
+      ]
+    },
+    "co64": {
+      "label": "${entryCount} chunk offsets (64-bit)",
+      "fields": [
+        { "name": "version", "type": "u8" }, { "name": "flags", "type": "u24", "format": "hex" },
+        { "name": "entryCount", "type": "u32" },
+        { "name": "offsets", "type": "u64", "format": "hex", "count": "entryCount",
+          "valid": "_ < _size", "validLevel": "error", "validMsg": "Chunk offset points past the end of the file (truncated mdat?)" }
+      ]
+    },
+    "stss": {
+      "label": "${entryCount} sync samples (keyframes)",
+      "fields": [
+        { "name": "version", "type": "u8" }, { "name": "flags", "type": "u24", "format": "hex" },
+        { "name": "entryCount", "type": "u32" },
+        { "name": "samples", "type": "u32", "count": "entryCount" }
+      ]
+    },
+    "elst": {
+      "fields": [
+        { "name": "version", "type": "u8" }, { "name": "flags", "type": "u24", "format": "hex" },
+        { "name": "entryCount", "type": "u32" },
+        { "name": "entries", "type": "struct", "count": "entryCount", "fields": [
+          { "name": "segmentDuration", "type": "switch", "on": "version", "cases": { "1": "u64" }, "default": "u32" },
+          { "name": "mediaTime", "type": "switch", "on": "version", "cases": { "1": "i64" }, "default": "i32" },
+          { "name": "mediaRate", "type": "u32", "scale": 0.0000152587890625 }
+        ] }
+      ]
+    },
+    "mfhd": { "fields": [ { "name": "version", "type": "u8" }, { "name": "flags", "type": "u24", "format": "hex" }, { "name": "sequenceNumber", "type": "u32" } ] }
+  },
+  "enums": {
+    "boxName": {
+      "ftyp": "file type", "moov": "movie", "mvhd": "movie header", "trak": "track", "tkhd": "track header", "mdia": "media",
+      "mdhd": "media header", "hdlr": "handler", "minf": "media info", "stbl": "sample table", "stsd": "sample descriptions",
+      "stts": "decoding time-to-sample", "stsc": "sample-to-chunk", "stsz": "sample sizes", "stco": "chunk offsets", "co64": "chunk offsets 64",
+      "stss": "sync samples", "ctts": "composition offsets", "mdat": "media data", "free": "free space", "skip": "free space",
+      "udta": "user data", "meta": "metadata", "ilst": "iTunes metadata list", "edts": "edits", "elst": "edit list",
+      "moof": "movie fragment", "traf": "track fragment", "mfhd": "fragment header", "tfhd": "track fragment header", "trun": "track run",
+      "sidx": "segment index", "mvex": "movie extends", "dinf": "data info", "dref": "data reference", "vmhd": "video media header",
+      "smhd": "sound media header", "avcC": "H.264 config", "hvcC": "HEVC config", "av1C": "AV1 config", "esds": "MPEG-4 ES descriptor",
+      "pasp": "pixel aspect", "colr": "colour info", "btrt": "bitrate", "uuid": "user extension", "wide": "QuickTime wide placeholder"
+    },
+    "handler": { "vide": "video", "soun": "audio", "hint": "hint", "meta": "metadata", "text": "text", "sbtl": "subtitles", "subt": "subtitles", "mdir": "iTunes metadata", "pict": "picture (HEIF)" },
+    "brand": { "isom": "ISO base media", "iso2": "ISO base media v2", "mp41": "MP4 v1", "mp42": "MP4 v2", "M4A ": "Apple audio", "M4V ": "Apple video", "qt  ": "QuickTime", "3gp4": "3GPP", "3gp5": "3GPP", "heic": "HEIC image", "mif1": "HEIF image", "avif": "AVIF image", "dash": "MPEG-DASH", "msnv": "Sony PSP" }
+  }
+}

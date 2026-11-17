@@ -1,0 +1,39 @@
+{
+  "id": "gzip",
+  "name": "GZIP stream",
+  "doc": "RFC 1952. 10-byte header, optional extra/name/comment/header-CRC fields selected by flag bits, a raw DEFLATE stream, then CRC-32 and size (mod 2^32) of the uncompressed data.",
+  "extensions": ["gz", "tgz", "gzip"],
+  "mime": "application/gzip",
+  "magic": [{ "offset": 0, "hex": "1F 8B" }],
+  "endian": "little",
+  "bitOrder": "lsb",
+  "preview": "gzip",
+  "root": [
+    { "name": "header", "type": "struct", "label": "header", "fields": [
+      { "name": "magic", "type": "bytes", "length": 2, "expect": "1F8B" },
+      { "name": "method", "type": "u8", "enum": "method", "expect": 8, "expectLevel": "warn" },
+      { "name": "flags", "type": "u8", "format": "bin", "bits": [
+        { "name": "text", "bits": 1 }, { "name": "headerCrc", "bits": 1 }, { "name": "extra", "bits": 1 },
+        { "name": "name", "bits": 1 }, { "name": "comment", "bits": 1 }, { "name": "reserved", "bits": 3 }
+      ] },
+      { "name": "mtime", "type": "u32", "format": "unixtime" },
+      { "name": "extraFlags", "type": "u8", "enum": "xfl" },
+      { "name": "os", "type": "u8", "enum": "os" },
+      { "name": "extraLength", "type": "u16", "if": "flags.extra" },
+      { "name": "extra", "type": "bytes", "length": "extraLength", "if": "flags.extra" },
+      { "name": "fileName", "type": "cstring", "if": "flags.name" },
+      { "name": "comment", "type": "cstring", "if": "flags.comment" },
+      { "name": "headerCrc16", "type": "u16", "format": "hex", "if": "flags.headerCrc" }
+    ] },
+    { "name": "deflate", "type": "bytes", "length": "_size - _pos - 8", "doc": "Raw DEFLATE (RFC 1951) data." },
+    { "name": "trailer", "type": "struct", "label": "trailer", "fields": [
+      { "name": "crc32", "type": "u32", "format": "hex", "doc": "CRC-32 of the uncompressed data" },
+      { "name": "isize", "type": "u32", "doc": "Uncompressed size modulo 2^32" }
+    ] }
+  ],
+  "enums": {
+    "method": { "8": "deflate" },
+    "xfl": { "0": "default", "2": "max compression", "4": "fastest" },
+    "os": { "0": "FAT", "1": "Amiga", "2": "VMS", "3": "Unix", "6": "HPFS", "7": "Macintosh", "10": "TOPS-20", "11": "NTFS", "255": "unknown" }
+  }
+}

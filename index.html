@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>File Object Browser</title>
+  <meta name="description" content="Open any file in the browser and explore it as hex, text and grammar-driven structure. Grammars are JSON; broken PNG and ZIP files can be rebuilt.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand" title="File Object Browser">
+      <span class="logo">▦</span><span class="brand-name">FOB</span>
+    </div>
+    <nav class="crumbs" id="crumbs"></nav>
+    <div class="spacer"></div>
+
+    <button class="btn primary" id="btnOpen" title="Open a file (Ctrl+O)">Open file</button>
+    <div class="menu">
+      <button class="btn" data-menu="samplesMenu">Samples ▾</button>
+      <div class="menu-pop" id="samplesMenu"></div>
+    </div>
+
+    <label class="field" title="Grammar used to interpret the file">
+      <span>Grammar</span>
+      <select id="grammarSelect"></select>
+    </label>
+    <div class="menu">
+      <button class="btn" data-menu="grammarMenu">Grammar ▾</button>
+      <div class="menu-pop" id="grammarMenu">
+        <button data-act="editGrammar">Edit current grammar…</button>
+        <button data-act="newGrammar">New grammar…</button>
+        <button data-act="importGrammar">Load grammar file (.json)…</button>
+        <button data-act="exportGrammar">Download current grammar</button>
+        <hr>
+        <button data-act="help">Grammar format reference</button>
+      </div>
+    </div>
+    <div class="menu">
+      <button class="btn" data-menu="toolsMenu">Tools ▾</button>
+      <div class="menu-pop" id="toolsMenu">
+        <button data-act="repair" id="actRepair">Repair / reconstruct…</button>
+        <button data-act="preview" id="actPreview">Preview contents…</button>
+        <button data-act="carve">Find embedded files…</button>
+        <button data-act="lookupSettings">Hash lookup settings…</button>
+        <hr>
+        <button data-act="openSelection">Open selection as a new file</button>
+        <button data-act="exportSelection">Download selection</button>
+        <button data-act="copyHex">Copy selection as hex</button>
+        <hr>
+        <button data-act="download">Download current file</button>
+      </div>
+    </div>
+    <button class="btn icon" id="btnTheme" title="Toggle light/dark">◐</button>
+  </header>
+
+  <div class="toolbar">
+    <div class="seg" id="viewSeg" role="tablist" aria-label="View">
+      <button data-view="hex" class="on" title="xxd-style hex + ASCII with section colours (1)">Hex</button>
+      <button data-view="annotated" title="Hex broken into labelled grammar sections (2)">Annotated</button>
+      <button data-view="text" title="Whole file decoded as text (3)">Text</button>
+    </div>
+    <label class="field small" title="How many levels of structure become section headers in Annotated view">
+      <span>Depth</span>
+      <select id="depthSelect">
+        <option value="1">1</option><option value="2" selected>2</option><option value="3">3</option>
+        <option value="4">4</option><option value="6">6</option><option value="99">all</option>
+      </select>
+    </label>
+    <label class="field small" title="Bytes per row">
+      <span>Width</span>
+      <select id="widthSelect"><option>8</option><option selected>16</option><option>24</option><option>32</option></select>
+    </label>
+    <label class="check" title="Show the section-label overlay column"><input type="checkbox" id="chkNotes" checked> Labels</label>
+    <label class="check" title="Colour bytes by grammar section"><input type="checkbox" id="chkColors" checked> Colours</label>
+    <div class="spacer"></div>
+    <form class="search" id="gotoForm" title="Go to offset: 0x1F, 1234, +16, -0x10">
+      <input id="gotoInput" placeholder="Go to offset" autocomplete="off" spellcheck="false">
+    </form>
+    <form class="search" id="findForm" title="Find: text, or hex bytes like 89 50 4E 47 (prefix with x: to force hex, &quot; for text)">
+      <input id="findInput" placeholder="Find text or hex…" autocomplete="off" spellcheck="false">
+      <span id="findStatus"></span>
+    </form>
+  </div>
+
+  <main class="layout" id="layout">
+    <aside class="panel left" id="leftPanel">
+      <div class="tabs">
+        <button class="tab on" data-tab="tree">Structure</button>
+        <button class="tab" data-tab="issues">Issues <span class="badge" id="issueBadge">0</span></button>
+      </div>
+      <div class="tab-body" id="treeWrap">
+        <input class="tree-filter" id="treeFilter" placeholder="Filter fields…" spellcheck="false">
+        <div class="tree" id="tree" role="tree"></div>
+      </div>
+      <div class="tab-body hidden" id="issuesWrap">
+        <div class="issue-filters">
+          <label><input type="checkbox" data-lvl="error" checked> errors</label>
+          <label><input type="checkbox" data-lvl="warn" checked> warnings</label>
+          <label><input type="checkbox" data-lvl="info"> info</label>
+        </div>
+        <div class="issues" id="issues"></div>
+      </div>
+    </aside>
+    <div class="resizer" data-resize="left"></div>
+
+    <section class="center">
+      <div class="hex-wrap" id="hexWrap">
+        <div class="hex-head" id="hexHead"></div>
+        <div class="hex-scroll" id="hexScroll" tabindex="0">
+          <div class="hex-spacer" id="hexSpacer"></div>
+          <div class="hex-rows" id="hexRows"></div>
+        </div>
+        <pre class="text-view hidden" id="textView"></pre>
+        <div class="minimap" id="minimap" title="File map: click or drag to navigate">
+          <canvas id="minimapCanvas"></canvas>
+          <div class="minimap-view" id="minimapView"></div>
+        </div>
+      </div>
+      <div class="drop-hint" id="empty">
+        <div class="empty-card">
+          <div class="big">Drop a file anywhere</div>
+          <p>It's read locally and never uploaded. FOB matches it against a grammar and shows its bytes, its structure, and what's wrong with it.</p>
+          <div class="empty-actions">
+            <button class="btn primary" id="btnOpen2">Choose a file…</button>
+            <span class="or">or try a sample:</span>
+            <div id="emptySamples" class="sample-chips"></div>
+          </div>
+          <p class="fine" id="grammarCount"></p>
+        </div>
+      </div>
+    </section>
+    <div class="resizer" data-resize="right"></div>
+
+    <aside class="panel right" id="rightPanel">
+      <div class="inspector" id="inspector"></div>
+      <div class="interp" id="interp"></div>
+    </aside>
+  </main>
+
+  <footer class="status" id="status">
+    <span id="stFile">No file</span>
+    <span id="stGrammar"></span>
+    <span id="stIssues"></span>
+    <span class="spacer"></span>
+    <span id="stHover"></span>
+    <span id="stCursor"></span>
+    <span id="stSel"></span>
+  </footer>
+
+  <div class="tooltip hidden" id="tooltip"></div>
+  <div class="dropzone hidden" id="dropzone"><div>Drop to open</div></div>
+  <div class="busy hidden" id="busy"><div class="spinner"></div><span id="busyMsg">Parsing…</span></div>
+
+  <dialog id="modal">
+    <form method="dialog" class="modal-head">
+      <h2 id="modalTitle"></h2>
+      <button class="btn icon" value="close" title="Close">✕</button>
+    </form>
+    <div class="modal-body" id="modalBody"></div>
+  </dialog>
+
+  <input type="file" id="fileInput" hidden>
+  <input type="file" id="grammarInput" accept=".json,application/json" hidden>
+
+  <script src="js/expr.js"></script>
+  <script src="js/engine.js"></script>
+  <script src="js/repair.js"></script>
+  <script src="js/enrich.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

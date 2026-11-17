@@ -1,0 +1,67 @@
+{
+  "id": "riff",
+  "name": "RIFF (WAV / AVI / WebP)",
+  "doc": "Resource Interchange File Format. 'RIFF', a u32 size of everything after it, a form type (WAVE, AVI , WEBP…) and then chunks: 4-char id, u32 size, data, plus a pad byte when size is odd. LIST chunks contain nested chunks.",
+  "extensions": ["wav", "wave", "avi", "webp", "rmi", "ani"],
+  "magic": [{ "offset": 0, "ascii": "RIFF" }],
+  "endian": "little",
+  "preview": "media",
+  "root": [
+    { "name": "riff", "type": "struct", "size": "read('u32', 4) + 8", "label": "RIFF ${form}", "fields": [
+      { "name": "id", "type": "string", "length": 4, "expect": "RIFF" },
+      { "name": "size", "type": "u32", "valid": "_ + 8 == _size", "validMsg": "RIFF size + 8 = ${_ + 8}, but the file is ${_size} bytes (truncated or padded)" },
+      { "name": "form", "type": "string", "length": 4 },
+      { "name": "chunks", "type": "chunk", "repeat": "eof" }
+    ] }
+  ],
+  "structs": {
+    "chunk": {
+      "label": "${id} · ${size} B",
+      "colorBy": "id",
+      "fields": [
+        { "name": "id", "type": "string", "length": 4, "trim": false,
+          "valid": "match(_pos - 4, '20-7E 20-7E 20-7E 20-7E')", "validMsg": "Chunk id is not printable ASCII — chunk stream is out of sync" },
+        { "name": "size", "type": "u32" },
+        { "name": "data", "type": "switch", "on": "id", "size": "size",
+          "cases": { "fmt ": "fmt", "LIST": "list", "fact": "fact", "VP8X": "vp8x" },
+          "default": "bytes" },
+        { "name": "pad", "type": "u8", "if": "(size & 1) && _remaining > 0", "doc": "Pad byte: chunks are word aligned" }
+      ]
+    },
+    "list": {
+      "label": "LIST ${listType}",
+      "fields": [
+        { "name": "listType", "type": "string", "length": 4 },
+        { "name": "chunks", "type": "chunk", "repeat": "eof" }
+      ]
+    },
+    "fmt": {
+      "label": "${enumName('format', audioFormat)} ${channels}ch ${sampleRate} Hz ${bitsPerSample}-bit",
+      "fields": [
+        { "name": "audioFormat", "type": "u16", "format": "hex", "enum": "format" },
+        { "name": "channels", "type": "u16" },
+        { "name": "sampleRate", "type": "u32", "unit": "Hz" },
+        { "name": "byteRate", "type": "u32", "valid": "_ == sampleRate * blockAlign", "validMsg": "byteRate should equal sampleRate × blockAlign" },
+        { "name": "blockAlign", "type": "u16", "valid": "audioFormat != 1 || _ == channels * bitsPerSample / 8" },
+        { "name": "bitsPerSample", "type": "u16" },
+        { "name": "extraSize", "type": "u16", "if": "_remaining >= 2" },
+        { "name": "extra", "type": "bytes", "length": "_remaining", "if": "_remaining > 0" }
+      ]
+    },
+    "fact": { "fields": [ { "name": "sampleLength", "type": "u32" } ] },
+    "vp8x": {
+      "fields": [
+        { "name": "flags", "type": "u8", "format": "bin", "bits": [
+          { "name": "reserved", "bits": 2, "hidden": true }, { "name": "icc", "bits": 1 }, { "name": "alpha", "bits": 1 },
+          { "name": "exif", "bits": 1 }, { "name": "xmp", "bits": 1 }, { "name": "animation", "bits": 1 }, { "name": "reserved2", "bits": 1, "hidden": true }
+        ] },
+        { "name": "reserved", "type": "u24" },
+        { "name": "canvasWidthMinus1", "type": "u24" },
+        { "name": "canvasHeightMinus1", "type": "u24" }
+      ]
+    }
+  },
+  "enums": {
+    "format": { "0x0001": "PCM", "0x0003": "IEEE float", "0x0006": "A-law", "0x0007": "µ-law", "0x0011": "IMA ADPCM", "0x0055": "MP3", "0xFFFE": "Extensible" }
+  }
+}

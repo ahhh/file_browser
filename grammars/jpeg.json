@@ -1,0 +1,130 @@
+{
+  "id": "jpeg",
+  "name": "JPEG image",
+  "doc": "JPEG / JFIF / EXIF (ITU T.81). A stream of segments, each introduced by a 0xFF marker byte. Most segments carry a big-endian length that includes the length field itself. After SOS (start of scan) comes entropy-coded data, in which any literal 0xFF is followed by a stuffed 0x00, so the next real marker can be found by scanning.",
+  "extensions": ["jpg", "jpeg", "jfif", "jpe"],
+  "mime": "image/jpeg",
+  "magic": [{ "offset": 0, "hex": "FF D8 FF" }],
+  "endian": "big",
+  "preview": "image",
+  "root": [
+    { "name": "segments", "type": "switch", "repeat": "eof", "until": "_last.marker == 0xFFD9",
+      "on": "peek('u8') != 0xFF ? 'garbage' : (peek('u8', 1) == 0xFF ? 'fill' : peek('u16'))",
+      "cases": {
+        "0xFFD8": "standalone",
+        "0xFFD9": "standalone",
+        "0xFF01": "standalone",
+        "0xFFD0": "standalone", "0xFFD1": "standalone", "0xFFD2": "standalone", "0xFFD3": "standalone",
+        "0xFFD4": "standalone", "0xFFD5": "standalone", "0xFFD6": "standalone", "0xFFD7": "standalone",
+        "0xFFDA": "sos",
+        "0xFFE0": "app0",
+        "0xFFC0": "sof", "0xFFC1": "sof", "0xFFC2": "sof", "0xFFC3": "sof",
+        "0xFFDD": "dri",
+        "0xFFFE": "comment",
+        "fill": { "type": "u8", "format": "hex", "doc": "Fill byte (0xFF padding before a marker)" },
+        "garbage": { "type": "bytes", "terminator": "FF C0-FE", "warn": "Data that is not a marker segment; skipped to the next marker" }
+      },
+      "default": "segment" }
+  ],
+  "structs": {
+    "standalone": {
+      "label": "${enumName('marker', marker) || hex(marker, 4)}",
+      "colorBy": "marker",
+      "fields": [ { "name": "marker", "type": "u16", "format": "hex", "enum": "marker" } ]
+    },
+    "segment": {
+      "label": "${enumName('marker', marker) || hex(marker, 4)} · ${length} B",
+      "colorBy": "marker",
+      "fields": [
+        { "name": "marker", "type": "u16", "format": "hex", "enum": "marker" },
+        { "name": "length", "type": "u16", "valid": "_ >= 2", "validMsg": "Segment length must be at least 2" },
+        { "name": "data", "type": "bytes", "length": "length - 2" }
+      ]
+    },
+    "app0": {
+      "label": "APP0 ${identifier}",
+      "colorBy": "marker",
+      "fields": [
+        { "name": "marker", "type": "u16", "format": "hex", "enum": "marker" },
+        { "name": "length", "type": "u16" },
+        { "name": "body", "type": "struct", "size": "length - 2", "fields": [
+          { "name": "identifier", "type": "cstring" },
+          { "name": "versionMajor", "type": "u8", "if": "identifier == 'JFIF'" },
+          { "name": "versionMinor", "type": "u8", "if": "identifier == 'JFIF'" },
+          { "name": "densityUnits", "type": "u8", "enum": "densityUnits", "if": "identifier == 'JFIF'" },
+          { "name": "xDensity", "type": "u16", "if": "identifier == 'JFIF'" },
+          { "name": "yDensity", "type": "u16", "if": "identifier == 'JFIF'" },
+          { "name": "thumbWidth", "type": "u8", "if": "identifier == 'JFIF'" },
+          { "name": "thumbHeight", "type": "u8", "if": "identifier == 'JFIF'" },
+          { "name": "rest", "type": "bytes", "length": "_remaining", "if": "_remaining > 0" }
+        ] }
+      ]
+    },
+    "sof": {
+      "label": "${enumName('marker', marker)} · ${width}×${height}",
+      "colorBy": "marker",
+      "fields": [
+        { "name": "marker", "type": "u16", "format": "hex", "enum": "marker" },
+        { "name": "length", "type": "u16" },
+        { "name": "precision", "type": "u8", "unit": "bits" },
+        { "name": "height", "type": "u16", "unit": "px" },
+        { "name": "width", "type": "u16", "unit": "px" },
+        { "name": "componentCount", "type": "u8" },
+        { "name": "components", "type": "struct", "count": "componentCount", "label": "${enumName('component', id) || id}", "fields": [
+          { "name": "id", "type": "u8", "enum": "component" },
+          { "name": "sampling", "type": "u8", "format": "hex", "bits": [ { "name": "horizontal", "bits": 4 }, { "name": "vertical", "bits": 4 } ] },
+          { "name": "quantTable", "type": "u8" }
+        ] }
+      ]
+    },
+    "dri": {
+      "label": "DRI · every ${interval} MCUs",
+      "colorBy": "marker",
+      "fields": [
+        { "name": "marker", "type": "u16", "format": "hex", "enum": "marker" },
+        { "name": "length", "type": "u16" },
+        { "name": "interval", "type": "u16" }
+      ]
+    },
+    "comment": {
+      "label": "COM ${text}",
+      "colorBy": "marker",
+      "fields": [
+        { "name": "marker", "type": "u16", "format": "hex", "enum": "marker" },
+        { "name": "length", "type": "u16" },
+        { "name": "text", "type": "string", "length": "length - 2" }
+      ]
+    },
+    "sos": {
+      "label": "SOS · ${componentCount} components + scan data",
+      "colorBy": "marker",
+      "fields": [
+        { "name": "marker", "type": "u16", "format": "hex", "enum": "marker" },
+        { "name": "length", "type": "u16" },
+        { "name": "componentCount", "type": "u8" },
+        { "name": "components", "type": "struct", "count": "componentCount", "fields": [
+          { "name": "id", "type": "u8", "enum": "component" },
+          { "name": "tables", "type": "u8", "bits": [ { "name": "dcTable", "bits": 4 }, { "name": "acTable", "bits": 4 } ] }
+        ] },
+        { "name": "spectralStart", "type": "u8" },
+        { "name": "spectralEnd", "type": "u8" },
+        { "name": "approximation", "type": "u8", "format": "hex" },
+        { "name": "scanData", "type": "bytes", "terminator": "FF !00,D0-D7",
+          "terminatorLevel": "error",
+          "doc": "Entropy-coded image data. Ends at the first 0xFF not followed by 0x00 or a restart marker." }
+      ]
+    }
+  },
+  "enums": {
+    "marker": {
+      "0xFFD8": "SOI", "0xFFD9": "EOI", "0xFFDA": "SOS", "0xFFDB": "DQT", "0xFFC4": "DHT", "0xFFDD": "DRI", "0xFFFE": "COM", "0xFF01": "TEM",
+      "0xFFC0": "SOF0 baseline", "0xFFC1": "SOF1 extended", "0xFFC2": "SOF2 progressive", "0xFFC3": "SOF3 lossless",
+      "0xFFE0": "APP0", "0xFFE1": "APP1 (EXIF/XMP)", "0xFFE2": "APP2 (ICC)", "0xFFE3": "APP3", "0xFFE4": "APP4", "0xFFE5": "APP5",
+      "0xFFE6": "APP6", "0xFFE7": "APP7", "0xFFE8": "APP8", "0xFFE9": "APP9", "0xFFEA": "APP10", "0xFFEB": "APP11",
+      "0xFFEC": "APP12", "0xFFED": "APP13 (Photoshop)", "0xFFEE": "APP14 (Adobe)", "0xFFEF": "APP15",
+      "0xFFD0": "RST0", "0xFFD1": "RST1", "0xFFD2": "RST2", "0xFFD3": "RST3", "0xFFD4": "RST4", "0xFFD5": "RST5", "0xFFD6": "RST6", "0xFFD7": "RST7"
+    },
+    "densityUnits": { "0": "aspect ratio only", "1": "dots per inch", "2": "dots per cm" },
+    "component": { "1": "Y", "2": "Cb", "3": "Cr", "4": "I", "5": "Q" }
+  }
+}

@@ -1,0 +1,158 @@
+{
+  "id": "zip",
+  "name": "ZIP archive",
+  "doc": "PKWARE ZIP (APPNOTE.TXT). A sequence of local file headers each followed by file data, then a central directory and an End Of Central Directory record. Readers normally start from the EOCD at the end of the file; this grammar walks records front to back, which also works for archives whose tail is missing. Also matches JAR, DOCX/XLSX/PPTX, EPUB, APK, ODT.",
+  "extensions": ["zip", "jar", "docx", "xlsx", "pptx", "epub", "apk", "odt", "ods", "odp", "war", "whl", "ipa", "xpi", "cbz"],
+  "mime": "application/zip",
+  "magic": [{ "offset": 0, "hex": "50 4B 03 04" }, { "offset": 0, "hex": "50 4B 05 06" }],
+  "endian": "little",
+  "bitOrder": "lsb",
+  "repair": "zip",
+  "preview": "zip",
+  "root": [
+    { "name": "records", "type": "switch", "repeat": "eof", "on": "peek('u32')",
+      "cases": {
+        "0x04034b50": "localFile",
+        "0x02014b50": "centralDir",
+        "0x06054b50": "eocd",
+        "0x08074b50": "dataDescriptor",
+        "0x06064b50": "zip64Eocd",
+        "0x07064b50": "zip64Locator",
+        "0x05054b50": "digitalSignature"
+      },
+      "default": { "type": "bytes", "terminator": "50 4B 01-08 02-08", "warn": "Unrecognised data; skipped to the next PK signature" } }
+  ],
+  "structs": {
+    "localFile": {
+      "label": "file: ${fileName}",
+      "colorBy": "'local'",
+      "doc": "Local file header followed by the (usually compressed) file data.",
+      "fields": [
+        { "name": "signature", "type": "u32", "format": "hex", "expect": "0x04034b50" },
+        { "name": "versionNeeded", "type": "u16", "doc": "Minimum spec version to extract, ×10 (20 = 2.0)." },
+        { "name": "flags", "type": "u16", "format": "bin", "bits": "@zipFlags" },
+        { "name": "method", "type": "u16", "enum": "method" },
+        { "name": "modTime", "type": "u16", "format": "dostime" },
+        { "name": "modDate", "type": "u16", "format": "dosdate" },
+        { "name": "crc32", "type": "u32", "format": "hex", "doc": "CRC-32 of the uncompressed data. Zero if bit 3 of flags is set (value lives in the data descriptor)." },
+        { "name": "compressedSize", "type": "u32" },
+        { "name": "uncompressedSize", "type": "u32" },
+        { "name": "fileNameLength", "type": "u16" },
+        { "name": "extraLength", "type": "u16" },
+        { "name": "fileName", "type": "string", "length": "fileNameLength", "encoding": "utf-8" },
+        { "name": "extra", "type": "extraFields", "size": "extraLength", "if": "extraLength > 0" },
+        { "name": "data", "type": "bytes", "length": "compressedSize", "if": "!(flags.dataDescriptor && compressedSize == 0)",
+          "doc": "File contents, compressed with the given method." },
+        { "name": "data", "type": "bytes", "terminator": "50 4B 07 08", "if": "flags.dataDescriptor && compressedSize == 0",
+          "doc": "Streamed data: size unknown in the header, so it runs until the data descriptor signature." }
+      ]
+    },
+    "dataDescriptor": {
+      "label": "data descriptor",
+      "fields": [
+        { "name": "signature", "type": "u32", "format": "hex", "expect": "0x08074b50" },
+        { "name": "crc32", "type": "u32", "format": "hex" },
+        { "name": "compressedSize", "type": "u32" },
+        { "name": "uncompressedSize", "type": "u32" }
+      ]
+    },
+    "centralDir": {
+      "label": "central: ${fileName}",
+      "colorBy": "'central'",
+      "fields": [
+        { "name": "signature", "type": "u32", "format": "hex", "expect": "0x02014b50" },
+        { "name": "versionMadeBy", "type": "u16", "bits": [ { "name": "hostOS", "bits": 8, "enum": "hostOS" }, { "name": "version", "bits": 8 } ], "bitOrder": "msb" },
+        { "name": "versionNeeded", "type": "u16" },
+        { "name": "flags", "type": "u16", "format": "bin", "bits": "@zipFlags" },
+        { "name": "method", "type": "u16", "enum": "method" },
+        { "name": "modTime", "type": "u16", "format": "dostime" },
+        { "name": "modDate", "type": "u16", "format": "dosdate" },
+        { "name": "crc32", "type": "u32", "format": "hex" },
+        { "name": "compressedSize", "type": "u32" },
+        { "name": "uncompressedSize", "type": "u32" },
+        { "name": "fileNameLength", "type": "u16" },
+        { "name": "extraLength", "type": "u16" },
+        { "name": "commentLength", "type": "u16" },
+        { "name": "diskStart", "type": "u16" },
+        { "name": "internalAttr", "type": "u16", "format": "hex" },
+        { "name": "externalAttr", "type": "u32", "format": "hex", "doc": "Host-specific. For Unix, the high 16 bits are st_mode." },
+        { "name": "localHeaderOffset", "type": "u32", "format": "hex",
+          "valid": "_ == 0xFFFFFFFF || read('u32', _) == 0x04034b50", "validLevel": "error",
+          "validMsg": "Does not point at a local file header (archive was shifted, truncated or concatenated)" },
+        { "name": "fileName", "type": "string", "length": "fileNameLength", "encoding": "utf-8" },
+        { "name": "extra", "type": "extraFields", "size": "extraLength", "if": "extraLength > 0" },
+        { "name": "comment", "type": "string", "length": "commentLength", "encoding": "utf-8", "if": "commentLength > 0" }
+      ]
+    },
+    "extraFields": { "fields": [ { "name": "fields", "type": "extraField", "repeat": "eof" } ] },
+    "extraField": {
+      "label": "${enumName('extraId', id) || hex(id, 4)}",
+      "fields": [
+        { "name": "id", "type": "u16", "format": "hex", "enum": "extraId" },
+        { "name": "size", "type": "u16" },
+        { "name": "data", "type": "bytes", "length": "size" }
+      ]
+    },
+    "eocd": {
+      "label": "end of central directory",
+      "colorBy": "'eocd'",
+      "fields": [
+        { "name": "signature", "type": "u32", "format": "hex", "expect": "0x06054b50" },
+        { "name": "diskNumber", "type": "u16" },
+        { "name": "cdDisk", "type": "u16" },
+        { "name": "entriesOnDisk", "type": "u16" },
+        { "name": "totalEntries", "type": "u16" },
+        { "name": "cdSize", "type": "u32" },
+        { "name": "cdOffset", "type": "u32", "format": "hex",
+          "valid": "_ == 0xFFFFFFFF || read('u32', _) == 0x02014b50 || totalEntries == 0", "validLevel": "error",
+          "validMsg": "Central directory offset does not point at a central directory header" },
+        { "name": "commentLength", "type": "u16" },
+        { "name": "comment", "type": "string", "length": "commentLength", "if": "commentLength > 0" }
+      ]
+    },
+    "zip64Eocd": {
+      "label": "zip64 end of central directory",
+      "fields": [
+        { "name": "signature", "type": "u32", "format": "hex" },
+        { "name": "recordSize", "type": "u64" },
+        { "name": "body", "type": "bytes", "length": "recordSize" }
+      ]
+    },
+    "zip64Locator": {
+      "label": "zip64 EOCD locator",
+      "fields": [
+        { "name": "signature", "type": "u32", "format": "hex" },
+        { "name": "disk", "type": "u32" },
+        { "name": "zip64EocdOffset", "type": "u64", "format": "hex" },
+        { "name": "totalDisks", "type": "u32" }
+      ]
+    },
+    "digitalSignature": {
+      "fields": [
+        { "name": "signature", "type": "u32", "format": "hex" },
+        { "name": "size", "type": "u16" },
+        { "name": "data", "type": "bytes", "length": "size" }
+      ]
+    }
+  },
+  "bitsets": {
+    "zipFlags": [
+      { "name": "encrypted", "bits": 1 },
+      { "name": "compressionOption", "bits": 2 },
+      { "name": "dataDescriptor", "bits": 1, "doc": "CRC and sizes follow the data in a data descriptor" },
+      { "name": "enhancedDeflate", "bits": 1 },
+      { "name": "patched", "bits": 1 },
+      { "name": "strongEncryption", "bits": 1 },
+      { "name": "unused", "bits": 4, "hidden": true },
+      { "name": "utf8", "bits": 1, "doc": "File name and comment are UTF-8" },
+      { "name": "reserved", "bits": 1, "hidden": true },
+      { "name": "maskedHeader", "bits": 1 },
+      { "name": "reserved2", "bits": 2, "hidden": true }
+    ]
+  },
+  "enums": {
+    "method": { "0": "stored", "1": "shrunk", "6": "imploded", "8": "deflate", "9": "deflate64", "12": "bzip2", "14": "LZMA", "93": "zstd", "95": "xz", "98": "PPMd", "99": "AES encrypted" },
+    "hostOS": { "0": "MS-DOS/FAT", "3": "Unix", "7": "Macintosh", "10": "NTFS", "19": "OS X (Darwin)" },
+    "extraId": { "0x0001": "Zip64", "0x000a": "NTFS times", "0x5455": "Extended timestamp (UT)", "0x7875": "Unix UID/GID (ux)", "0x7855": "Info-ZIP Unix (Ux)", "0x9901": "AES", "0xcafe": "JAR marker", "0xd935": "Android alignment" }
+  }
+}

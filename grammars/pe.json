@@ -1,0 +1,117 @@
+{
+  "id": "pe",
+  "name": "PE executable (EXE/DLL)",
+  "doc": "Microsoft Portable Executable / COFF. A legacy MS-DOS 'MZ' header whose e_lfanew field points at the 'PE\\0\\0' signature, followed by the COFF file header, the optional header (PE32 or PE32+ for 64-bit) with its data directories, and the section table. Section contents are located by pointerToRawData. Data after the last section is an 'overlay' (installers and self-extractors keep payloads there; Authenticode signatures live there too).",
+  "extensions": ["exe", "dll", "sys", "efi", "scr", "ocx", "cpl", "drv", "mui"],
+  "magic": [{ "offset": 0, "ascii": "MZ" }],
+  "endian": "little",
+  "bitOrder": "lsb",
+  "root": [
+    { "name": "dos", "type": "struct", "label": "DOS header (MZ)", "fields": [
+      { "name": "e_magic", "type": "string", "length": 2, "expect": "MZ" },
+      { "name": "e_cblp", "type": "u16", "doc": "Bytes on last page" },
+      { "name": "e_cp", "type": "u16", "doc": "Pages in file" },
+      { "name": "e_crlc", "type": "u16" }, { "name": "e_cparhdr", "type": "u16" },
+      { "name": "e_minalloc", "type": "u16" }, { "name": "e_maxalloc", "type": "u16" },
+      { "name": "e_ss", "type": "u16" }, { "name": "e_sp", "type": "u16" }, { "name": "e_csum", "type": "u16" },
+      { "name": "e_ip", "type": "u16" }, { "name": "e_cs", "type": "u16" }, { "name": "e_lfarlc", "type": "u16" }, { "name": "e_ovno", "type": "u16" },
+      { "name": "e_res", "type": "bytes", "length": 8 },
+      { "name": "e_oemid", "type": "u16" }, { "name": "e_oeminfo", "type": "u16" },
+      { "name": "e_res2", "type": "bytes", "length": 20 },
+      { "name": "e_lfanew", "type": "u32", "format": "hex", "doc": "File offset of the PE signature",
+        "valid": "_ >= 64 && _ + 24 <= _size", "validLevel": "error", "validMsg": "e_lfanew points outside the file — this is a plain DOS program or the header is corrupt" }
+    ] },
+    { "name": "dosStub", "type": "bytes", "length": "dos.e_lfanew - 64", "if": "dos.e_lfanew > 64 && dos.e_lfanew < _size", "format": "ascii",
+      "doc": "16-bit real-mode stub (prints 'This program cannot be run in DOS mode'). MSVC also hides the undocumented 'Rich' header here." },
+    { "name": "nt", "type": "struct", "if": "dos.e_lfanew >= 64 && dos.e_lfanew + 24 <= _size", "label": "PE · ${enumName('machine', coff.machine) || hex(coff.machine, 4)} · ${coff.numberOfSections} sections", "fields": [
+      { "name": "signature", "type": "bytes", "length": 4, "expect": "50450000", "expectMsg": "PE signature" },
+      { "name": "coff", "type": "struct", "label": "COFF file header", "fields": [
+        { "name": "machine", "type": "u16", "format": "hex", "enum": "machine" },
+        { "name": "numberOfSections", "type": "u16", "valid": "_ <= 96", "validMsg": "More than 96 sections is not allowed" },
+        { "name": "timeDateStamp", "type": "u32", "format": "unixtime", "doc": "Link time (or a hash, for reproducible builds)" },
+        { "name": "pointerToSymbolTable", "type": "u32", "format": "hex" },
+        { "name": "numberOfSymbols", "type": "u32" },
+        { "name": "sizeOfOptionalHeader", "type": "u16" },
+        { "name": "characteristics", "type": "u16", "format": "hex", "bits": [
+          { "name": "relocsStripped", "bits": 1 }, { "name": "executable", "bits": 1 }, { "name": "lineNumsStripped", "bits": 1 },
+          { "name": "localSymsStripped", "bits": 1 }, { "name": "aggressiveWsTrim", "bits": 1 }, { "name": "largeAddressAware", "bits": 1 },
+          { "name": "reserved", "bits": 1, "hidden": true }, { "name": "bytesReversedLo", "bits": 1 }, { "name": "machine32bit", "bits": 1 },
+          { "name": "debugStripped", "bits": 1 }, { "name": "removableRunFromSwap", "bits": 1 }, { "name": "netRunFromSwap", "bits": 1 },
+          { "name": "system", "bits": 1 }, { "name": "dll", "bits": 1 }, { "name": "upSystemOnly", "bits": 1 }, { "name": "bytesReversedHi", "bits": 1 }
+        ] }
+      ] },
+      { "name": "optional", "type": "struct", "size": "coff.sizeOfOptionalHeader", "if": "coff.sizeOfOptionalHeader > 0",
+        "label": "optional header · ${enumName('optMagic', magic)} · ${enumName('subsystem', subsystem) || ''}", "fields": [
+        { "name": "magic", "type": "u16", "format": "hex", "enum": "optMagic", "enumStrict": true },
+        { "name": "majorLinkerVersion", "type": "u8" }, { "name": "minorLinkerVersion", "type": "u8" },
+        { "name": "sizeOfCode", "type": "u32" }, { "name": "sizeOfInitializedData", "type": "u32" }, { "name": "sizeOfUninitializedData", "type": "u32" },
+        { "name": "addressOfEntryPoint", "type": "u32", "format": "hex", "doc": "RVA of the entry point" },
+        { "name": "baseOfCode", "type": "u32", "format": "hex" },
+        { "name": "baseOfData", "type": "u32", "format": "hex", "if": "magic == 0x10b" },
+        { "name": "imageBase", "type": "switch", "on": "magic", "cases": { "0x20b": "u64" }, "default": "u32", "format": "hex" },
+        { "name": "sectionAlignment", "type": "u32", "format": "hex" },
+        { "name": "fileAlignment", "type": "u32", "format": "hex" },
+        { "name": "majorOSVersion", "type": "u16" }, { "name": "minorOSVersion", "type": "u16" },
+        { "name": "majorImageVersion", "type": "u16" }, { "name": "minorImageVersion", "type": "u16" },
+        { "name": "majorSubsystemVersion", "type": "u16" }, { "name": "minorSubsystemVersion", "type": "u16" },
+        { "name": "win32VersionValue", "type": "u32" },
+        { "name": "sizeOfImage", "type": "u32", "format": "hex" },
+        { "name": "sizeOfHeaders", "type": "u32", "format": "hex" },
+        { "name": "checkSum", "type": "u32", "format": "hex", "doc": "Only verified for drivers and critical system DLLs" },
+        { "name": "subsystem", "type": "u16", "enum": "subsystem" },
+        { "name": "dllCharacteristics", "type": "u16", "format": "hex", "bits": [
+          { "name": "reserved", "bits": 5, "hidden": true }, { "name": "highEntropyVA", "bits": 1 }, { "name": "dynamicBase (ASLR)", "bits": 1 },
+          { "name": "forceIntegrity", "bits": 1 }, { "name": "nxCompat (DEP)", "bits": 1 }, { "name": "noIsolation", "bits": 1 },
+          { "name": "noSEH", "bits": 1 }, { "name": "noBind", "bits": 1 }, { "name": "appContainer", "bits": 1 },
+          { "name": "wdmDriver", "bits": 1 }, { "name": "guardCF", "bits": 1 }, { "name": "terminalServerAware", "bits": 1 }
+        ] },
+        { "name": "sizeOfStackReserve", "type": "switch", "on": "magic", "cases": { "0x20b": "u64" }, "default": "u32" },
+        { "name": "sizeOfStackCommit", "type": "switch", "on": "magic", "cases": { "0x20b": "u64" }, "default": "u32" },
+        { "name": "sizeOfHeapReserve", "type": "switch", "on": "magic", "cases": { "0x20b": "u64" }, "default": "u32" },
+        { "name": "sizeOfHeapCommit", "type": "switch", "on": "magic", "cases": { "0x20b": "u64" }, "default": "u32" },
+        { "name": "loaderFlags", "type": "u32" },
+        { "name": "numberOfRvaAndSizes", "type": "u32" },
+        { "name": "dataDirectories", "type": "struct", "count": "min(numberOfRvaAndSizes, 16)",
+          "label": "${enumName('dataDir', _index) || 'dir ' + _index}${size ? ' · rva ' + hex(rva) + ' · ' + size + ' B' : ' · (empty)'}", "fields": [
+          { "name": "rva", "type": "u32", "format": "hex" },
+          { "name": "size", "type": "u32" }
+        ] }
+      ] }
+    ] },
+    { "name": "sections", "type": "section", "count": "nt.coff.numberOfSections", "if": "has(nt) && has(nt.coff)" },
+    { "name": "certificateTable", "type": "bytes", "offset": "nt.optional.dataDirectories[4].rva", "length": "nt.optional.dataDirectories[4].size",
+      "if": "has(nt.optional) && len(nt.optional.dataDirectories) > 4 && nt.optional.dataDirectories[4].size > 0",
+      "doc": "Authenticode signature (WIN_CERTIFICATE). Unlike other directories, this one is a file offset, not an RVA." }
+  ],
+  "structs": {
+    "section": {
+      "label": "${name} · ${sizeOfRawData} B @ ${hex(pointerToRawData)}",
+      "colorBy": "name",
+      "fields": [
+        { "name": "name", "type": "string", "length": 8 },
+        { "name": "virtualSize", "type": "u32" },
+        { "name": "virtualAddress", "type": "u32", "format": "hex" },
+        { "name": "sizeOfRawData", "type": "u32" },
+        { "name": "pointerToRawData", "type": "u32", "format": "hex",
+          "valid": "_ + sizeOfRawData <= _size", "validLevel": "error", "validMsg": "Section data runs past the end of the file (truncated executable?)" },
+        { "name": "pointerToRelocations", "type": "u32", "format": "hex" },
+        { "name": "pointerToLinenumbers", "type": "u32", "format": "hex" },
+        { "name": "numberOfRelocations", "type": "u16" },
+        { "name": "numberOfLinenumbers", "type": "u16" },
+        { "name": "characteristics", "type": "u32", "format": "hex", "bits": [
+          { "name": "reserved", "bits": 5, "hidden": true }, { "name": "code", "bits": 1 }, { "name": "initializedData", "bits": 1 }, { "name": "uninitializedData", "bits": 1 },
+          { "name": "reserved2", "bits": 17, "hidden": true },
+          { "name": "discardable", "bits": 1 }, { "name": "notCached", "bits": 1 }, { "name": "notPaged", "bits": 1 }, { "name": "shared", "bits": 1 },
+          { "name": "execute", "bits": 1 }, { "name": "read", "bits": 1 }, { "name": "write", "bits": 1 }
+        ] },
+        { "name": "contents", "type": "bytes", "offset": "pointerToRawData", "length": "sizeOfRawData", "if": "sizeOfRawData > 0 && pointerToRawData > 0" }
+      ]
+    }
+  },
+  "enums": {
+    "machine": { "0x014c": "i386", "0x8664": "x86-64 (AMD64)", "0x01c0": "ARM", "0x01c4": "ARMv7 Thumb-2", "0xaa64": "ARM64", "0x0200": "IA-64", "0x5064": "RISC-V 64", "0x0ebc": "EFI byte code", "0x0000": "unknown" },
+    "optMagic": { "0x10b": "PE32", "0x20b": "PE32+ (64-bit)", "0x107": "ROM image" },
+    "subsystem": { "1": "native", "2": "Windows GUI", "3": "Windows console", "5": "OS/2 console", "7": "POSIX console", "9": "Windows CE GUI", "10": "EFI application", "11": "EFI boot driver", "12": "EFI runtime driver", "13": "EFI ROM", "14": "Xbox", "16": "boot application" },
+    "dataDir": { "0": "Export table", "1": "Import table", "2": "Resource table", "3": "Exception table", "4": "Certificate table", "5": "Base relocations", "6": "Debug", "7": "Architecture", "8": "Global ptr", "9": "TLS table", "10": "Load config", "11": "Bound import", "12": "IAT", "13": "Delay import", "14": "CLR runtime (.NET)", "15": "Reserved" }
+  }
+}

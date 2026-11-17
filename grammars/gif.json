@@ -1,0 +1,96 @@
+{
+  "id": "gif",
+  "name": "GIF image",
+  "doc": "Graphics Interchange Format 87a/89a. Header, logical screen descriptor, optional global colour table, then a sequence of extension and image blocks ending with the trailer byte 0x3B. Variable-length data is stored as sub-blocks: a length byte (1-255) followed by that many bytes, ending with a zero-length block.",
+  "extensions": ["gif"],
+  "mime": "image/gif",
+  "magic": [{ "offset": 0, "ascii": "GIF87a" }, { "offset": 0, "ascii": "GIF89a" }],
+  "endian": "little",
+  "bitOrder": "msb",
+  "preview": "image",
+  "root": [
+    { "name": "header", "type": "struct", "label": "GIF${version}", "fields": [
+      { "name": "signature", "type": "string", "length": 3, "expect": "GIF" },
+      { "name": "version", "type": "string", "length": 3, "expect": ["87a", "89a"], "expectLevel": "warn" }
+    ] },
+    { "name": "screen", "type": "struct", "label": "logical screen ${width}×${height}", "fields": [
+      { "name": "width", "type": "u16", "unit": "px" },
+      { "name": "height", "type": "u16", "unit": "px" },
+      { "name": "flags", "type": "u8", "format": "bin", "bits": [
+        { "name": "globalColorTable", "bits": 1 },
+        { "name": "colorResolution", "bits": 3 },
+        { "name": "sorted", "bits": 1 },
+        { "name": "gctSize", "bits": 3, "doc": "Table has 2^(n+1) entries" }
+      ] },
+      { "name": "backgroundIndex", "type": "u8" },
+      { "name": "aspectRatio", "type": "u8" }
+    ] },
+    { "name": "globalColorTable", "type": "rgb", "count": "2 << screen.flags.gctSize", "if": "screen.flags.globalColorTable" },
+    { "name": "blocks", "type": "switch", "repeat": "eof", "until": "_last.introducer == 0x3B", "on": "peek('u8')",
+      "cases": { "0x21": "extension", "0x2C": "image", "0x3B": "trailer" },
+      "default": { "type": "bytes", "length": "_remaining", "error": "Unknown block introducer — data is corrupt from here on" } }
+  ],
+  "structs": {
+    "rgb": {
+      "label": "#${hex(r,2).slice(2)}${hex(g,2).slice(2)}${hex(b,2).slice(2)}",
+      "fields": [ { "name": "r", "type": "u8" }, { "name": "g", "type": "u8" }, { "name": "b", "type": "u8" } ]
+    },
+    "subBlock": {
+      "label": "${size} B",
+      "fields": [
+        { "name": "size", "type": "u8" },
+        { "name": "data", "type": "bytes", "length": "size", "if": "size > 0" }
+      ]
+    },
+    "extension": {
+      "label": "${enumName('extLabel', label) || 'extension ' + hex(label)}",
+      "colorBy": "label",
+      "fields": [
+        { "name": "introducer", "type": "u8", "format": "hex", "expect": "0x21" },
+        { "name": "label", "type": "u8", "format": "hex", "enum": "extLabel" },
+        { "name": "graphicControl", "type": "struct", "if": "label == 0xF9", "fields": [
+          { "name": "blockSize", "type": "u8", "expect": 4 },
+          { "name": "flags", "type": "u8", "format": "bin", "bits": [
+            { "name": "reserved", "bits": 3, "hidden": true },
+            { "name": "disposal", "bits": 3, "enum": "disposal" },
+            { "name": "userInput", "bits": 1 },
+            { "name": "transparent", "bits": 1 }
+          ] },
+          { "name": "delay", "type": "u16", "unit": "×10 ms" },
+          { "name": "transparentIndex", "type": "u8" },
+          { "name": "terminator", "type": "u8", "expect": 0 }
+        ] },
+        { "name": "subBlocks", "type": "subBlock", "until": "_last.size == 0", "if": "label != 0xF9" }
+      ]
+    },
+    "image": {
+      "label": "image ${width}×${height} @ ${left},${top}",
+      "colorBy": "'image'",
+      "fields": [
+        { "name": "introducer", "type": "u8", "format": "hex", "expect": "0x2C" },
+        { "name": "left", "type": "u16" },
+        { "name": "top", "type": "u16" },
+        { "name": "width", "type": "u16" },
+        { "name": "height", "type": "u16" },
+        { "name": "flags", "type": "u8", "format": "bin", "bits": [
+          { "name": "localColorTable", "bits": 1 },
+          { "name": "interlaced", "bits": 1 },
+          { "name": "sorted", "bits": 1 },
+          { "name": "reserved", "bits": 2, "hidden": true },
+          { "name": "lctSize", "bits": 3 }
+        ] },
+        { "name": "localColorTable", "type": "rgb", "count": "2 << flags.lctSize", "if": "flags.localColorTable" },
+        { "name": "lzwMinCodeSize", "type": "u8", "valid": "_ >= 2 && _ <= 11" },
+        { "name": "imageData", "type": "subBlock", "until": "_last.size == 0" }
+      ]
+    },
+    "trailer": {
+      "label": "trailer",
+      "fields": [ { "name": "introducer", "type": "u8", "format": "hex", "expect": "0x3B" } ]
+    }
+  },
+  "enums": {
+    "extLabel": { "0xF9": "Graphic Control", "0xFE": "Comment", "0xFF": "Application", "0x01": "Plain Text" },
+    "disposal": { "0": "unspecified", "1": "do not dispose", "2": "restore to background", "3": "restore to previous" }
+  }
+}

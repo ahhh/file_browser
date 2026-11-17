@@ -1,0 +1,123 @@
+{
+  "id": "png",
+  "name": "PNG image",
+  "doc": "Portable Network Graphics (RFC 2083 / W3C PNG 3rd ed.). An 8-byte signature followed by chunks. Each chunk is length (u32 BE), 4-letter type, data, and a CRC-32 over type+data. The file ends with IEND.",
+  "extensions": ["png", "apng"],
+  "mime": "image/png",
+  "magic": [{ "offset": 0, "hex": "89 50 4E 47 0D 0A 1A 0A" }],
+  "endian": "big",
+  "repair": "png",
+  "preview": "image",
+  "root": [
+    { "name": "signature", "type": "bytes", "length": 8, "expect": "89504E470D0A1A0A",
+      "doc": "0x89 'PNG' CR LF ^Z LF. The CR/LF bytes detect text-mode transfer corruption: if 0D is missing, the file was probably sent through an FTP ASCII transfer." },
+    { "name": "chunks", "type": "chunk", "repeat": "eof", "until": "_last.type == 'IEND'" }
+  ],
+  "structs": {
+    "chunk": {
+      "label": "${type} · ${length} B",
+      "colorBy": "type",
+      "doc": "Uppercase first letter = critical chunk, lowercase = ancillary. Second letter uppercase = public. Fourth letter lowercase = safe to copy.",
+      "fields": [
+        { "name": "length", "type": "u32", "doc": "Length of the data field only (not type or CRC).", "valid": "_ <= 0x7FFFFFFF", "validMsg": "Chunk length exceeds 2^31-1" },
+        { "name": "type", "type": "string", "length": 4, "doc": "Chunk type code.", "valid": "match(_pos - 4, '41-5A,61-7A 41-5A,61-7A 41-5A,61-7A 41-5A,61-7A')", "validMsg": "Chunk type is not four ASCII letters — chunk stream is probably out of sync" },
+        { "name": "data", "type": "switch", "on": "type", "size": "length",
+          "cases": {
+            "IHDR": "ihdr", "PLTE": "plte", "tEXt": "text", "zTXt": "ztxt", "iTXt": "itxt",
+            "tIME": "time", "pHYs": "phys", "gAMA": "gama", "sRGB": "srgb", "cHRM": "chrm",
+            "bKGD": "bytes", "tRNS": "bytes", "acTL": "actl", "fcTL": "fctl", "fdAT": "fdat", "eXIf": "bytes"
+          },
+          "default": "bytes" },
+        { "name": "crc", "type": "u32", "format": "hex", "doc": "CRC-32 (ISO 3309) over the type and data fields.",
+          "checksum": { "algo": "crc32", "from": "type", "to": "data" } }
+      ]
+    },
+    "ihdr": {
+      "doc": "Image header. Must be the first chunk.",
+      "fields": [
+        { "name": "width", "type": "u32", "unit": "px", "valid": "_ > 0", "validMsg": "Width must be non-zero" },
+        { "name": "height", "type": "u32", "unit": "px", "valid": "_ > 0", "validMsg": "Height must be non-zero" },
+        { "name": "bitDepth", "type": "u8", "valid": "_ == 1 || _ == 2 || _ == 4 || _ == 8 || _ == 16", "validMsg": "Bit depth must be 1, 2, 4, 8 or 16" },
+        { "name": "colorType", "type": "u8", "enum": "colorType", "enumStrict": true },
+        { "name": "compression", "type": "u8", "expect": 0, "enum": "compression" },
+        { "name": "filter", "type": "u8", "expect": 0, "enum": "filter" },
+        { "name": "interlace", "type": "u8", "enum": "interlace", "enumStrict": true }
+      ]
+    },
+    "plte": { "fields": [ { "name": "entries", "type": "rgb", "repeat": "eof" } ] },
+    "rgb": {
+      "label": "#${hex(r,2).slice(2)}${hex(g,2).slice(2)}${hex(b,2).slice(2)}",
+      "fields": [ { "name": "r", "type": "u8" }, { "name": "g", "type": "u8" }, { "name": "b", "type": "u8" } ]
+    },
+    "text": {
+      "label": "${keyword}",
+      "fields": [
+        { "name": "keyword", "type": "cstring", "doc": "1-79 bytes Latin-1 keyword, null terminated." },
+        { "name": "text", "type": "string", "length": "_remaining" }
+      ]
+    },
+    "ztxt": {
+      "label": "${keyword}",
+      "fields": [
+        { "name": "keyword", "type": "cstring" },
+        { "name": "method", "type": "u8", "enum": "compression" },
+        { "name": "compressed", "type": "bytes", "length": "_remaining", "doc": "zlib stream" }
+      ]
+    },
+    "itxt": {
+      "label": "${keyword}",
+      "fields": [
+        { "name": "keyword", "type": "cstring" },
+        { "name": "compressed", "type": "u8", "format": "bool" },
+        { "name": "method", "type": "u8", "enum": "compression" },
+        { "name": "language", "type": "cstring" },
+        { "name": "translatedKeyword", "type": "cstring", "encoding": "utf-8" },
+        { "name": "text", "type": "string", "length": "_remaining", "encoding": "utf-8", "if": "!compressed" },
+        { "name": "compressedText", "type": "bytes", "length": "_remaining", "if": "compressed" }
+      ]
+    },
+    "time": {
+      "label": "${year}-${month}-${day} ${hour}:${minute}:${second}",
+      "fields": [
+        { "name": "year", "type": "u16" }, { "name": "month", "type": "u8" }, { "name": "day", "type": "u8" },
+        { "name": "hour", "type": "u8" }, { "name": "minute", "type": "u8" }, { "name": "second", "type": "u8" }
+      ]
+    },
+    "phys": {
+      "fields": [
+        { "name": "pixelsPerUnitX", "type": "u32" },
+        { "name": "pixelsPerUnitY", "type": "u32" },
+        { "name": "unit", "type": "u8", "enum": "physUnit" }
+      ]
+    },
+    "gama": { "fields": [ { "name": "gamma", "type": "u32", "scale": 0.00001 } ] },
+    "srgb": { "fields": [ { "name": "intent", "type": "u8", "enum": "renderingIntent" } ] },
+    "chrm": {
+      "fields": [
+        { "name": "whiteX", "type": "u32", "scale": 0.00001 }, { "name": "whiteY", "type": "u32", "scale": 0.00001 },
+        { "name": "redX", "type": "u32", "scale": 0.00001 }, { "name": "redY", "type": "u32", "scale": 0.00001 },
+        { "name": "greenX", "type": "u32", "scale": 0.00001 }, { "name": "greenY", "type": "u32", "scale": 0.00001 },
+        { "name": "blueX", "type": "u32", "scale": 0.00001 }, { "name": "blueY", "type": "u32", "scale": 0.00001 }
+      ]
+    },
+    "actl": { "doc": "APNG animation control", "fields": [ { "name": "numFrames", "type": "u32" }, { "name": "numPlays", "type": "u32", "doc": "0 = loop forever" } ] },
+    "fctl": {
+      "doc": "APNG frame control",
+      "fields": [
+        { "name": "sequence", "type": "u32" }, { "name": "width", "type": "u32" }, { "name": "height", "type": "u32" },
+        { "name": "xOffset", "type": "u32" }, { "name": "yOffset", "type": "u32" },
+        { "name": "delayNum", "type": "u16" }, { "name": "delayDen", "type": "u16" },
+        { "name": "disposeOp", "type": "u8" }, { "name": "blendOp", "type": "u8" }
+      ]
+    },
+    "fdat": { "fields": [ { "name": "sequence", "type": "u32" }, { "name": "frameData", "type": "bytes", "length": "_remaining" } ] }
+  },
+  "enums": {
+    "colorType": { "0": "Greyscale", "2": "Truecolour (RGB)", "3": "Indexed-colour", "4": "Greyscale + alpha", "6": "Truecolour + alpha (RGBA)" },
+    "compression": { "0": "deflate/inflate" },
+    "filter": { "0": "adaptive (5 filter types)" },
+    "interlace": { "0": "none", "1": "Adam7" },
+    "physUnit": { "0": "unknown (aspect ratio only)", "1": "metre" },
+    "renderingIntent": { "0": "Perceptual", "1": "Relative colorimetric", "2": "Saturation", "3": "Absolute colorimetric" }
+  }
+}
